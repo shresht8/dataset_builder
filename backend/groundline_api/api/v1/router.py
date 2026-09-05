@@ -7,15 +7,19 @@ from fastapi import APIRouter
 from groundline_api.api.v1 import (
     auth,
     datasets,
+    health,
     imports,
     rows,
     schema,
     traces,
+    users,
     versions,
 )
 
 router = APIRouter()
+router.include_router(health.router)
 router.include_router(auth.router)
+router.include_router(users.router)
 router.include_router(datasets.router)
 router.include_router(schema.router)
 router.include_router(rows.router)

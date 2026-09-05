@@ -25,3 +25,22 @@ make test        # run all tests
 
 Copy [`.env.example`](.env.example) to `.env` and fill in Entra OIDC and storage
 settings before running.
+
+## First admin & dev login (interim, pre-Entra)
+
+Create (or promote) the first admin — idempotent, safe to re-run:
+
+```bash
+python -m groundline_api.bootstrap admin@example.com --name "Admin"
+```
+
+Alternatively set `BOOTSTRAP_ADMIN_EMAIL=admin@example.com` and the API
+ensures that admin exists at startup.
+
+Interactive auth is a passwordless **dev login** (`POST /v1/auth/login` with
+`{"email": ...}`) that sets a signed session cookie. It is gated by
+`AUTH_DEV_LOGIN` (default `true`) and only legal when `APP_ENV=dev` (default);
+the API refuses to start with dev login enabled under any other profile.
+Entra OIDC replaces it in Phase 3. Machine access uses personal access tokens
+(`POST /v1/auth/tokens`, sent as `Authorization: Bearer glpat_...`; default
+TTL 90 days).
