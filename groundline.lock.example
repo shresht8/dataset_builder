@@ -1,0 +1,6 @@
+{
+  "datasets": {
+    "claims-eligibility": {"version": 3, "content_hash": "sha256:a3f9c2…"},
+    "claims-appeals":     {"version": 1, "content_hash": "sha256:71ba0e…"}
+  }
+}

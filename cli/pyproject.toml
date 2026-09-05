@@ -1,0 +1,27 @@
+[project]
+name = "groundline"
+version = "0.1.0"
+description = "Groundline CLI — pull versioned datasets on your laptop and in CI"
+requires-python = ">=3.11"
+dependencies = [
+    "groundline-schema",
+    "typer",
+    "httpx",
+    "pyyaml",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "ruff"]
+
+[project.scripts]
+groundline = "groundline_cli.main:app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["groundline_cli"]
+
+[tool.uv.sources]
+groundline-schema = { path = "../shared", editable = true }
