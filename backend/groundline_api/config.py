@@ -8,12 +8,13 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    database_url: str
+    # Defaults match infra/docker-compose.yml so local dev boots without a .env.
+    database_url: str = "postgresql+psycopg://groundline:groundline@localhost:5432/groundline"
 
-    storage_endpoint_url: str
-    storage_bucket: str
-    storage_access_key: str
-    storage_secret_key: str
+    storage_endpoint_url: str = "http://localhost:9000"
+    storage_bucket: str = "groundline"
+    storage_access_key: str = "minioadmin"
+    storage_secret_key: str = "minioadmin"
 
     entra_tenant_id: str = ""
     entra_client_id: str = ""
@@ -22,7 +23,16 @@ class Settings(BaseSettings):
     oidc_scopes: str = "openid,profile,email"
 
     pat_default_ttl_days: int = 90
+    # Signs session cookies (GL-1-9). The default is for local dev only.
     app_secret_key: str = "change-me"
+
+    # GL-1-8: if set, create/promote this admin at API startup (idempotent).
+    bootstrap_admin_email: str = ""
+
+    # GL-1-9: deployment profile + passwordless dev login. Dev login is only
+    # legal when app_env == "dev"; create_app() refuses to start otherwise.
+    app_env: str = "dev"
+    auth_dev_login: bool = True
 
 
 settings = Settings()  # type: ignore[call-arg]

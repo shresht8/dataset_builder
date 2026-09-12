@@ -1,0 +1,11 @@
+# Keep the API image build context (infra/Dockerfile, context = repo root) small.
+.git
+docs
+cli
+infra
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+**/.ruff_cache
+.env
+.env.*

@@ -5,8 +5,8 @@ autogenerate and `create_all` see them.
 """
 
 from groundline_api.models.dataset import Dataset, DatasetColumn
-from groundline_api.models.row import DatasetRow, RowEdit
-from groundline_api.models.user import PersonalAccessToken, User
+from groundline_api.models.row import DatasetRow, RowEdit, RowStatus
+from groundline_api.models.user import PersonalAccessToken, Role, User
 from groundline_api.models.version import DatasetVersion
 
 __all__ = [
@@ -14,7 +14,9 @@ __all__ = [
     "DatasetColumn",
     "DatasetRow",
     "RowEdit",
+    "RowStatus",
     "DatasetVersion",
     "User",
+    "Role",
     "PersonalAccessToken",
 ]
