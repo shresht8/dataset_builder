@@ -1,0 +1,75 @@
+:root {
+  color-scheme: light dark;
+  font: 16px/1.5 system-ui, 'Segoe UI', Roboto, sans-serif;
+}
+
+body {
+  margin: 0;
+}
+
+.app-shell {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 0 24px;
+}
+
+.app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 0;
+  border-bottom: 1px solid #ccc;
+}
+
+.app-title {
+  font-weight: 600;
+  font-size: 1.2rem;
+}
+
+.app-user {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.login-page {
+  display: flex;
+  justify-content: center;
+  padding-top: 15vh;
+}
+
+.login-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 280px;
+}
+
+.login-hint {
+  margin: 0 0 8px;
+  color: #666;
+}
+
+.login-error {
+  color: #c0392b;
+  margin: 0;
+}
+
+.dataset-list {
+  list-style: none;
+  padding: 0;
+}
+
+.dataset-list li {
+  padding: 12px 0;
+  border-bottom: 1px solid #e5e4e7;
+}
+
+.dataset-description {
+  margin: 4px 0 0;
+  color: #666;
+}
+
+.error {
+  color: #c0392b;
+}

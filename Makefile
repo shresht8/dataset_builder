@@ -1,4 +1,4 @@
-.PHONY: install db-up db-down migrate run test lint
+.PHONY: install db-up db-down migrate run test lint web-install web-dev web-build web-lint
 
 install:
 	pip install -e ./shared -e ./backend -e ./cli
@@ -20,3 +20,15 @@ test:
 
 lint:
 	ruff check backend cli shared
+
+web-install:
+	cd web && npm install
+
+web-dev:
+	cd web && npm run dev
+
+web-build:
+	cd web && npm run build
+
+web-lint:
+	cd web && npm run lint
