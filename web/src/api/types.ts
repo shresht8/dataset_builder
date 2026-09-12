@@ -45,17 +45,38 @@ export interface Schema {
   columns: Column[]
 }
 
-// Mirrors backend/groundline_api/schemas/row.py RowRead. `status`/`assignee`
-// are omitted from the wire today (GL-2-3 not yet landed) but kept optional
-// here so this type doesn't need to change when they arrive.
+// Row status flow (§4): draft -> needs_review -> approved.
+export type RowStatus = 'draft' | 'needs_review' | 'approved'
+
+// Mirrors backend/groundline_api/schemas/row.py RowRead.
 export interface Row {
   id: string
   dataset_id: string
   data: Record<string, unknown>
   rev: number
-  status?: string
-  assignee?: string | null
+  status: RowStatus
+  assignee: string | null
   updated_by: string | null
   updated_at: string
+  created_at: string
+}
+
+// Mirrors backend/groundline_api/schemas/row.py RowEditRead (§3 row_edits).
+export interface RowEdit {
+  id: string
+  row_id: string
+  field: string
+  old_value: unknown
+  new_value: unknown
+  user_id: string | null
+  at: string
+}
+
+// Mirrors backend/groundline_api/schemas/comment.py CommentRead (§4).
+export interface RowComment {
+  id: string
+  row_id: string
+  user_id: string | null
+  body: string
   created_at: string
 }

@@ -173,3 +173,138 @@ td.grid-cell select {
   font: inherit;
   padding: 8px;
 }
+
+.filter-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 12px 0;
+}
+
+.view-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.view-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.view-btn.active {
+  background: #2563eb;
+  color: #fff;
+  border-color: #2563eb;
+}
+
+.view-delete {
+  padding: 0 6px;
+}
+
+.filter-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 16px;
+}
+
+.filter-controls label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 0.9rem;
+}
+
+.filter-controls .checkbox-label {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+}
+
+.hint {
+  background: #eef2ff;
+  border: 1px solid #c7d2fe;
+  padding: 8px 12px;
+  border-radius: 4px;
+}
+
+.workflow-cell {
+  white-space: nowrap;
+}
+
+.assignee-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.conflict-dialog {
+  background: #fff;
+  margin: auto;
+  max-width: 560px;
+  width: 90%;
+  padding: 20px;
+  border-radius: 6px;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.3);
+}
+
+.conflict-table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 12px 0;
+}
+
+.conflict-table th,
+.conflict-table td {
+  border: 1px solid #ddd;
+  padding: 6px 8px;
+  text-align: left;
+}
+
+.conflict-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.tab-bar {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.tab-bar .tab-active {
+  font-weight: 600;
+  text-decoration: underline;
+}
+
+.comment-list {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 16px;
+}
+
+.comment-list li {
+  padding: 8px 0;
+  border-bottom: 1px solid #eee;
+}
+
+.comment-meta {
+  color: #666;
+  font-size: 0.85rem;
+}
+
+.comment-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.comment-form textarea {
+  min-height: 80px;
+  font: inherit;
+  padding: 8px;
+}

@@ -1,7 +1,7 @@
 // Typed fetch wrapper for the Groundline API (§8). Every request sends
 // credentials so the signed session cookie (GL-1-9) round-trips; the Vite dev
 // server proxies /v1 to the backend so this works same-origin in dev.
-import type { Dataset, Row, Schema, User } from './types'
+import type { Dataset, Row, RowComment, RowEdit, RowStatus, Schema, User } from './types'
 
 export class ApiError extends Error {
   status: number
@@ -55,8 +55,20 @@ export function getSchema(datasetId: string): Promise<Schema> {
   return apiFetch<Schema>(`/datasets/${datasetId}/schema`)
 }
 
-export function listRows(datasetId: string): Promise<Row[]> {
-  return apiFetch<Row[]>(`/datasets/${datasetId}/rows`)
+// GET filters (§4, §8) AND together; assignee accepts a user id or 'me'.
+export interface RowFilters {
+  status?: RowStatus
+  assignee?: string
+  q?: string
+}
+
+export function listRows(datasetId: string, filters: RowFilters = {}): Promise<Row[]> {
+  const params = new URLSearchParams()
+  if (filters.status) params.set('status', filters.status)
+  if (filters.assignee) params.set('assignee', filters.assignee)
+  if (filters.q) params.set('q', filters.q)
+  const qs = params.toString()
+  return apiFetch<Row[]>(`/datasets/${datasetId}/rows${qs ? `?${qs}` : ''}`)
 }
 
 export function createRow(datasetId: string, data: Record<string, unknown>): Promise<Row> {
@@ -66,6 +78,14 @@ export function createRow(datasetId: string, data: Record<string, unknown>): Pro
   })
 }
 
+// Partial update: any of data/status/assignee (§4, §8). `assignee: null`
+// unassigns; omit a field to leave it unchanged.
+export interface RowPatchPayload {
+  data?: Record<string, unknown>
+  status?: RowStatus
+  assignee?: string | null
+}
+
 // Optimistic-locking update (§4): `rev` is sent as If-Match and the API
 // returns 409 with the row's current state on mismatch (surfaced via
 // ApiError.body so the caller can refresh without silently overwriting).
@@ -73,11 +93,32 @@ export function patchRow(
   datasetId: string,
   rowId: string,
   rev: number,
-  data: Record<string, unknown>,
+  payload: RowPatchPayload,
 ): Promise<Row> {
   return apiFetch<Row>(`/datasets/${datasetId}/rows/${rowId}`, {
     method: 'PATCH',
     headers: { 'If-Match': String(rev) },
-    body: JSON.stringify({ data }),
+    body: JSON.stringify(payload),
   })
+}
+
+export function listComments(datasetId: string, rowId: string): Promise<RowComment[]> {
+  return apiFetch<RowComment[]>(`/datasets/${datasetId}/rows/${rowId}/comments`)
+}
+
+export function createComment(datasetId: string, rowId: string, body: string): Promise<RowComment> {
+  return apiFetch<RowComment>(`/datasets/${datasetId}/rows/${rowId}/comments`, {
+    method: 'POST',
+    body: JSON.stringify({ body }),
+  })
+}
+
+export function listEdits(datasetId: string, rowId: string): Promise<RowEdit[]> {
+  return apiFetch<RowEdit[]>(`/datasets/${datasetId}/rows/${rowId}/edits`)
+}
+
+// Admin-only (§5); non-admin callers must handle a 403 (no user-listing
+// endpoint exists for lesser roles — see GL-2-7 work log).
+export function listUsers(): Promise<User[]> {
+  return apiFetch<User[]>('/users')
 }
