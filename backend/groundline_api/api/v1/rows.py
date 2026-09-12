@@ -3,6 +3,8 @@
     GET   /datasets/{id}/rows?status=&assignee=&q=   assignee accepts 'me' or a user id
     POST  /datasets/{id}/rows
     PATCH /datasets/{id}/rows/{rid}   If-Match: <rev>   data/status/assignee (§4, §8)
+    GET/POST /datasets/{id}/rows/{rid}/comments   row comment thread (§4, GL-2-4)
+    GET   /datasets/{id}/rows/{rid}/edits         append-only edit history (§3, GL-2-4)
 """
 
 from __future__ import annotations
@@ -19,10 +21,12 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from groundline_api.deps import get_db, require_role
+from groundline_api.models.comment import RowComment
 from groundline_api.models.dataset import Dataset, DatasetColumn
-from groundline_api.models.row import DatasetRow, RowStatus
+from groundline_api.models.row import DatasetRow, RowEdit, RowStatus
 from groundline_api.models.user import Role, User
-from groundline_api.schemas.row import RowCreate, RowPatch, RowRead
+from groundline_api.schemas.comment import CommentCreate, CommentRead
+from groundline_api.schemas.row import RowCreate, RowEditRead, RowPatch, RowRead
 
 router = APIRouter(prefix="/datasets", tags=["rows"])
 
@@ -189,22 +193,92 @@ def patch_row(
         )
 
     fields_set = payload.model_fields_set
+    changes: list[tuple[str, Any, Any]] = []
 
     if payload.data is not None:
         merged_data = {**row.data, **payload.data}
         _validate_row_data(merged_data, _columns_of(db, dataset_id))
+        for key, new_value in payload.data.items():
+            old_value = row.data.get(key)
+            if old_value != new_value:
+                changes.append((key, old_value, new_value))
         row.data = merged_data
 
     if payload.status is not None:
+        if row.status != payload.status:
+            changes.append(("status", row.status.value, payload.status.value))
         row.status = payload.status
 
     if "assignee" in fields_set:
         if payload.assignee is not None and db.get(User, payload.assignee) is None:
             raise HTTPException(status_code=422, detail="assignee: user not found")
+        if row.assignee != payload.assignee:
+            old_assignee = str(row.assignee) if row.assignee is not None else None
+            new_assignee = str(payload.assignee) if payload.assignee is not None else None
+            changes.append(("assignee", old_assignee, new_assignee))
         row.assignee = payload.assignee
 
     row.rev = row.rev + 1
     row.updated_by = user.id
+    for field, old_value, new_value in changes:
+        db.add(
+            RowEdit(
+                row_id=row.id,
+                field=field,
+                old_value=old_value,
+                new_value=new_value,
+                user_id=user.id,
+            )
+        )
     db.commit()
     db.refresh(row)
     return row
+
+
+@router.get("/{dataset_id}/rows/{row_id}/comments", response_model=list[CommentRead])
+def list_comments(
+    dataset_id: uuid.UUID,
+    row_id: uuid.UUID,
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[User, Depends(require_role(Role.VIEWER))],
+) -> list[RowComment]:
+    _get_dataset_or_404(db, dataset_id)
+    _get_row_or_404(db, dataset_id, row_id)
+    stmt = (
+        select(RowComment)
+        .where(RowComment.row_id == row_id)
+        .order_by(RowComment.created_at)
+    )
+    return list(db.scalars(stmt))
+
+
+@router.post(
+    "/{dataset_id}/rows/{row_id}/comments", response_model=CommentRead, status_code=201
+)
+def create_comment(
+    dataset_id: uuid.UUID,
+    row_id: uuid.UUID,
+    payload: CommentCreate,
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[User, Depends(require_role(Role.ANNOTATOR))],
+) -> RowComment:
+    _get_dataset_or_404(db, dataset_id)
+    _get_row_or_404(db, dataset_id, row_id)
+    comment = RowComment(row_id=row_id, user_id=user.id, body=payload.body)
+    db.add(comment)
+    db.commit()
+    db.refresh(comment)
+    return comment
+
+
+@router.get("/{dataset_id}/rows/{row_id}/edits", response_model=list[RowEditRead])
+def list_edits(
+    dataset_id: uuid.UUID,
+    row_id: uuid.UUID,
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[User, Depends(require_role(Role.VIEWER))],
+) -> list[RowEdit]:
+    _get_dataset_or_404(db, dataset_id)
+    _get_row_or_404(db, dataset_id, row_id)
+    stmt = select(RowEdit).where(RowEdit.row_id == row_id).order_by(RowEdit.at)
+    return list(db.scalars(stmt))

@@ -43,4 +43,18 @@ class RowRead(BaseModel):
     updated_at: datetime
     created_at: datetime
 
+
+class RowEditRead(BaseModel):
+    """One `row_edits` record (§3, GL-2-4). Append-only audit history."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    row_id: uuid.UUID
+    field: str
+    old_value: Any
+    new_value: Any
+    user_id: uuid.UUID | None
+    at: datetime
+
 # TODO GL-1-5+: RowsFromTraces
