@@ -21,6 +21,7 @@ import { CommentsPanel } from './CommentsPanel'
 import { ConflictDialog } from './ConflictDialog'
 import { DetailDrawer } from './DetailDrawer'
 import { FilterBar } from './FilterBar'
+import { ImportWizard } from './ImportWizard'
 import { AssigneeControl, StatusControl } from './Workflow'
 import {
   BUILTIN_VIEWS,
@@ -84,6 +85,7 @@ export function DatasetPage() {
   const { datasetId } = useParams<{ datasetId: string }>()
   const { user } = useAuth()
   const isAdmin = user?.role === 'admin'
+  const canImport = user?.role === 'admin' || user?.role === 'editor'
   const [columns, setColumns] = useState<Column[] | null>(null)
   const [rows, setRows] = useState<Row[] | null>(null)
   const [users, setUsers] = useState<User[] | null>(null)
@@ -101,6 +103,7 @@ export function DatasetPage() {
   const [missingRequired, setMissingRequired] = useState(Boolean(DEFAULT_VIEW.missingRequired))
   const [searchInput, setSearchInput] = useState(DEFAULT_VIEW.filters.q ?? '')
   const [customViews, setCustomViews] = useState<SavedView[]>([])
+  const [importOpen, setImportOpen] = useState(false)
   const cellRefs = useRef(new Map<string, HTMLTableCellElement>())
 
   useEffect(() => {
@@ -207,6 +210,14 @@ export function DatasetPage() {
 
   function getCellValue(coord: CellCoord): unknown {
     return displayRows.find((row) => row.id === coord.rowId)?.data[coord.colKey]
+  }
+
+  // Re-fetch rows under the current filters (e.g. after an import, GL-2-9).
+  function reloadRows() {
+    if (!datasetId) return
+    listRows(datasetId, { status: filters.status, assignee: filters.assignee, q: filters.q })
+      .then(setRows)
+      .catch((err) => setNotice(err instanceof ApiError ? err.message : 'Failed to refresh rows'))
   }
 
   // Optimistic-locking PATCH (§4): on 409 the conflicting current row is
@@ -455,9 +466,14 @@ export function DatasetPage() {
 
   return (
     <div className="dataset-page">
-      <p>
+      <div className="page-toolbar">
         <Link to="/">&larr; Datasets</Link>
-      </p>
+        {canImport && (
+          <button type="button" onClick={() => setImportOpen(true)}>
+            Import
+          </button>
+        )}
+      </div>
       <FilterBar
         filters={filters}
         missingRequired={missingRequired}
@@ -584,6 +600,14 @@ export function DatasetPage() {
           theirs={conflict.theirs}
           onTakeTheirs={handleTakeTheirs}
           onRetryMine={handleRetryMine}
+        />
+      )}
+      {importOpen && datasetId && (
+        <ImportWizard
+          datasetId={datasetId}
+          columns={orderedColumns}
+          onClose={() => setImportOpen(false)}
+          onImported={reloadRows}
         />
       )}
     </div>

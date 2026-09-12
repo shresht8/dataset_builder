@@ -80,3 +80,35 @@ export interface RowComment {
   body: string
   created_at: string
 }
+
+// Mirrors backend/groundline_api/schemas/import_.py (§4, GL-2-9). Row
+// indices are 1-based over data rows only; the header row is not numbered.
+export interface ImportSampleRow {
+  row: number
+  values: Record<string, string>
+}
+
+export interface ImportValidationError {
+  row: number
+  column: string
+  reason: string
+}
+
+export interface ImportValidationReport {
+  valid: number
+  errors: ImportValidationError[]
+}
+
+export interface ImportPreviewResponse {
+  columns: string[]
+  suggested_mapping: Record<string, string>
+  sample_rows: ImportSampleRow[]
+  total_rows: number
+  validation: ImportValidationReport | null
+}
+
+export interface ImportCommitResponse {
+  imported: number
+  skipped: number
+  errors: ImportValidationError[]
+}

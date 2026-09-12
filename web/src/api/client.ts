@@ -1,7 +1,17 @@
 // Typed fetch wrapper for the Groundline API (§8). Every request sends
 // credentials so the signed session cookie (GL-1-9) round-trips; the Vite dev
 // server proxies /v1 to the backend so this works same-origin in dev.
-import type { Dataset, Row, RowComment, RowEdit, RowStatus, Schema, User } from './types'
+import type {
+  Dataset,
+  ImportCommitResponse,
+  ImportPreviewResponse,
+  Row,
+  RowComment,
+  RowEdit,
+  RowStatus,
+  Schema,
+  User,
+} from './types'
 
 export class ApiError extends Error {
   status: number
@@ -121,4 +131,51 @@ export function listEdits(datasetId: string, rowId: string): Promise<RowEdit[]> 
 // endpoint exists for lesser roles — see GL-2-7 work log).
 export function listUsers(): Promise<User[]> {
   return apiFetch<User[]>('/users')
+}
+
+// Like apiFetch, but for the multipart import endpoints: the browser must
+// set its own Content-Type (with the multipart boundary), so this can't
+// reuse apiFetch's forced 'Content-Type: application/json' header.
+async function apiFetchForm<T>(path: string, form: FormData): Promise<T> {
+  const response = await fetch(`/v1${path}`, {
+    method: 'POST',
+    credentials: 'include',
+    body: form,
+  })
+  if (!response.ok) {
+    const body = await response.json().catch(() => null)
+    throw new ApiError(response.status, body?.detail ?? response.statusText, body)
+  }
+  return response.json() as Promise<T>
+}
+
+// Import preview (§4, GL-2-9): parses the upload only, persists nothing.
+// Without `mapping`, returns detected columns + a suggested auto-mapping and
+// a sample. With `mapping`, additionally returns the full validation report.
+export function previewImport(
+  datasetId: string,
+  file: File,
+  mapping?: Record<string, string>,
+): Promise<ImportPreviewResponse> {
+  const form = new FormData()
+  form.append('file', file)
+  if (mapping) form.append('mapping', JSON.stringify(mapping))
+  return apiFetchForm<ImportPreviewResponse>(`/datasets/${datasetId}/import/preview`, form)
+}
+
+// Import commit (§4, GL-2-9): creates rows that pass validation under
+// `mapping` (with `fixes` applied first); rows in `skip` are not attempted.
+export function commitImport(
+  datasetId: string,
+  file: File,
+  mapping: Record<string, string>,
+  skip: number[],
+  fixes: Record<number, Record<string, unknown>>,
+): Promise<ImportCommitResponse> {
+  const form = new FormData()
+  form.append('file', file)
+  form.append('mapping', JSON.stringify(mapping))
+  if (skip.length > 0) form.append('skip', JSON.stringify(skip))
+  if (Object.keys(fixes).length > 0) form.append('fixes', JSON.stringify(fixes))
+  return apiFetchForm<ImportCommitResponse>(`/datasets/${datasetId}/import`, form)
 }
