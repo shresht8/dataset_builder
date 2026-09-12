@@ -1,8 +1,8 @@
 """Row routes (§8). Optimistic locking via If-Match on PATCH (§4).
 
-    GET   /datasets/{id}/rows?status=&assignee=&q=
+    GET   /datasets/{id}/rows?status=&assignee=&q=   assignee accepts 'me' or a user id
     POST  /datasets/{id}/rows
-    PATCH /datasets/{id}/rows/{rid}   If-Match: <rev>
+    PATCH /datasets/{id}/rows/{rid}   If-Match: <rev>   data/status/assignee (§4, §8)
 """
 
 from __future__ import annotations
@@ -107,9 +107,9 @@ def _validate_row_data(data: dict[str, Any], columns: list[DatasetColumn]) -> No
 def list_rows(
     dataset_id: uuid.UUID,
     db: Annotated[Session, Depends(get_db)],
-    _user: Annotated[User, Depends(require_role(Role.VIEWER))],
+    user: Annotated[User, Depends(require_role(Role.VIEWER))],
     status: RowStatus | None = None,
-    assignee: uuid.UUID | None = None,
+    assignee: str | None = None,
     q: str | None = None,
 ) -> list[DatasetRow]:
     _get_dataset_or_404(db, dataset_id)
@@ -117,7 +117,16 @@ def list_rows(
     if status is not None:
         stmt = stmt.where(DatasetRow.status == status)
     if assignee is not None:
-        stmt = stmt.where(DatasetRow.assignee == assignee)
+        if assignee == "me":
+            assignee_id = user.id
+        else:
+            try:
+                assignee_id = uuid.UUID(assignee)
+            except ValueError:
+                raise HTTPException(
+                    status_code=422, detail="assignee must be 'me' or a user id"
+                )
+        stmt = stmt.where(DatasetRow.assignee == assignee_id)
     if q:
         text_keys = [
             col.key for col in _columns_of(db, dataset_id) if col.type in _TEXT_SEARCH_TYPES
@@ -162,7 +171,7 @@ def patch_row(
     user: Annotated[User, Depends(require_role(Role.ANNOTATOR))],
     if_match: Annotated[str | None, Header(alias="If-Match")] = None,
 ) -> DatasetRow | JSONResponse:
-    """Optimistic-locking update of `data` (§4). Status/assignee: GL-2-3."""
+    """Optimistic-locking update of data, status, and assignee (§4, §8)."""
     _get_dataset_or_404(db, dataset_id)
     row = _get_row_or_404(db, dataset_id, row_id)
 
@@ -179,10 +188,21 @@ def patch_row(
             content=jsonable_encoder(RowRead.model_validate(row)),
         )
 
-    merged_data = {**row.data, **payload.data}
-    _validate_row_data(merged_data, _columns_of(db, dataset_id))
+    fields_set = payload.model_fields_set
 
-    row.data = merged_data
+    if payload.data is not None:
+        merged_data = {**row.data, **payload.data}
+        _validate_row_data(merged_data, _columns_of(db, dataset_id))
+        row.data = merged_data
+
+    if payload.status is not None:
+        row.status = payload.status
+
+    if "assignee" in fields_set:
+        if payload.assignee is not None and db.get(User, payload.assignee) is None:
+            raise HTTPException(status_code=422, detail="assignee: user not found")
+        row.assignee = payload.assignee
+
     row.rev = row.rev + 1
     row.updated_by = user.id
     db.commit()
