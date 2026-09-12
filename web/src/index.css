@@ -73,3 +73,103 @@ body {
 .error {
   color: #c0392b;
 }
+
+.notice {
+  background: #fff3cd;
+  border: 1px solid #ffe08a;
+  padding: 8px 12px;
+  border-radius: 4px;
+}
+
+table.grid {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 12px 0;
+}
+
+table.grid th,
+table.grid td.grid-cell {
+  border: 1px solid #ddd;
+  padding: 6px 8px;
+  text-align: left;
+  vertical-align: top;
+  max-width: 320px;
+}
+
+td.grid-cell {
+  outline: none;
+}
+
+td.grid-cell.active {
+  outline: 2px solid #2563eb;
+  outline-offset: -2px;
+}
+
+td.grid-cell input[type='text'],
+td.grid-cell input[type='number'],
+td.grid-cell select {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.cell-preview {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.multi-select-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ms-option {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.ms-option-highlight {
+  background: #dbeafe;
+}
+
+.drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.3);
+  display: flex;
+  justify-content: flex-end;
+  z-index: 10;
+}
+
+.drawer {
+  background: #fff;
+  width: 480px;
+  max-width: 100%;
+  height: 100%;
+  overflow-y: auto;
+  padding: 16px;
+  box-shadow: -2px 0 8px rgba(0, 0, 0, 0.2);
+}
+
+.drawer-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.drawer-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 16px;
+}
+
+.drawer-field textarea {
+  min-height: 160px;
+  font: inherit;
+  padding: 8px;
+}
