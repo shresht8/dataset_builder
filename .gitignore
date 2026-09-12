@@ -26,5 +26,5 @@ htmlcov/
 # Claude files
 *.claude
 
-Docs
+#docs
 docs/
