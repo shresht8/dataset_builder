@@ -11,7 +11,9 @@ import uuid
 from typing import Annotated, Any
 
 import sqlalchemy as sa
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import JSONResponse
 from groundline_schema import ColumnType
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -20,7 +22,7 @@ from groundline_api.deps import get_db, require_role
 from groundline_api.models.dataset import Dataset, DatasetColumn
 from groundline_api.models.row import DatasetRow, RowStatus
 from groundline_api.models.user import Role, User
-from groundline_api.schemas.row import RowCreate, RowRead
+from groundline_api.schemas.row import RowCreate, RowPatch, RowRead
 
 router = APIRouter(prefix="/datasets", tags=["rows"])
 
@@ -143,4 +145,46 @@ def create_row(
     db.refresh(row)
     return row
 
-# TODO GL-2-2+: patch_row (409 on rev mismatch)
+
+def _get_row_or_404(db: Session, dataset_id: uuid.UUID, row_id: uuid.UUID) -> DatasetRow:
+    row = db.get(DatasetRow, row_id)
+    if row is None or row.dataset_id != dataset_id:
+        raise HTTPException(status_code=404, detail="row not found")
+    return row
+
+
+@router.patch("/{dataset_id}/rows/{row_id}", response_model=RowRead)
+def patch_row(
+    dataset_id: uuid.UUID,
+    row_id: uuid.UUID,
+    payload: RowPatch,
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[User, Depends(require_role(Role.ANNOTATOR))],
+    if_match: Annotated[str | None, Header(alias="If-Match")] = None,
+) -> DatasetRow | JSONResponse:
+    """Optimistic-locking update of `data` (§4). Status/assignee: GL-2-3."""
+    _get_dataset_or_404(db, dataset_id)
+    row = _get_row_or_404(db, dataset_id, row_id)
+
+    if if_match is None:
+        raise HTTPException(status_code=428, detail="If-Match header required")
+    try:
+        expected_rev = int(if_match)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="If-Match must be an integer rev")
+
+    if row.rev != expected_rev:
+        return JSONResponse(
+            status_code=409,
+            content=jsonable_encoder(RowRead.model_validate(row)),
+        )
+
+    merged_data = {**row.data, **payload.data}
+    _validate_row_data(merged_data, _columns_of(db, dataset_id))
+
+    row.data = merged_data
+    row.rev = row.rev + 1
+    row.updated_by = user.id
+    db.commit()
+    db.refresh(row)
+    return row

@@ -16,12 +16,21 @@ class RowCreate(BaseModel):
     data: dict[str, Any]
 
 
+class RowPatch(BaseModel):
+    """Partial update: only the given keys of `data` change (§4)."""
+
+    data: dict[str, Any]
+
+
 class RowRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID
     dataset_id: uuid.UUID
     data: dict[str, Any]
+    rev: int
+    updated_by: uuid.UUID | None
+    updated_at: datetime
     created_at: datetime
 
-# TODO GL-1-5+: RowPatch, RowsFromTraces
+# TODO GL-1-5+: RowsFromTraces
