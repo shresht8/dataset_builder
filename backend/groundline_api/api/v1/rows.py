@@ -27,6 +27,7 @@ from groundline_api.models.row import DatasetRow, RowEdit, RowStatus
 from groundline_api.models.user import Role, User
 from groundline_api.schemas.comment import CommentCreate, CommentRead
 from groundline_api.schemas.row import RowCreate, RowEditRead, RowPatch, RowRead
+from groundline_api.services.validation import validate_row_data
 
 router = APIRouter(prefix="/datasets", tags=["rows"])
 
@@ -46,65 +47,6 @@ def _columns_of(db: Session, dataset_id: uuid.UUID) -> list[DatasetColumn]:
             select(DatasetColumn).where(DatasetColumn.dataset_id == dataset_id)
         )
     )
-
-
-def _is_empty(value: Any) -> bool:
-    if value is None:
-        return True
-    if isinstance(value, str) and value.strip() == "":
-        return True
-    if isinstance(value, list) and len(value) == 0:
-        return True
-    return False
-
-
-def _type_error(col: DatasetColumn, value: Any) -> str | None:
-    """Return an error fragment if `value` doesn't match `col.type`, else None."""
-    if col.type in (ColumnType.TEXT, ColumnType.LONG_TEXT):
-        if not isinstance(value, str):
-            return f"expected text, got {type(value).__name__}"
-    elif col.type == ColumnType.NUMBER:
-        if isinstance(value, bool) or not isinstance(value, (int, float)):
-            return f"expected a number, got {type(value).__name__}"
-    elif col.type == ColumnType.BOOLEAN:
-        if not isinstance(value, bool):
-            return f"expected a boolean, got {type(value).__name__}"
-    elif col.type == ColumnType.SELECT:
-        if not isinstance(value, str):
-            return f"expected one of {col.options}, got {type(value).__name__}"
-        if value not in (col.options or []):
-            return f"'{value}' is not one of {col.options}"
-    elif col.type == ColumnType.MULTI_SELECT:
-        if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
-            return f"expected a list of strings from {col.options}"
-        bad = [v for v in value if v not in (col.options or [])]
-        if bad:
-            return f"{bad} not in {col.options}"
-    return None
-
-
-def _validate_row_data(data: dict[str, Any], columns: list[DatasetColumn]) -> None:
-    """Validate `data` against the dataset's column schema (§3, §8).
-
-    Archived columns are accepted read-only: their values are neither
-    required nor type-checked. Fields with no matching column pass through
-    unvalidated (a dataset may have no schema defined yet).
-    """
-    for col in columns:
-        if col.archived:
-            continue
-        value = data.get(col.key)
-        if _is_empty(value):
-            if col.required:
-                raise HTTPException(
-                    status_code=422, detail=f"column '{col.key}': required"
-                )
-            continue
-        error = _type_error(col, value)
-        if error:
-            raise HTTPException(
-                status_code=422, detail=f"column '{col.key}': {error}"
-            )
 
 
 @router.get("/{dataset_id}/rows", response_model=list[RowRead])
@@ -151,7 +93,7 @@ def create_row(
     user: Annotated[User, Depends(require_role(Role.ANNOTATOR))],
 ) -> DatasetRow:
     _get_dataset_or_404(db, dataset_id)
-    _validate_row_data(payload.data, _columns_of(db, dataset_id))
+    validate_row_data(payload.data, _columns_of(db, dataset_id))
     row = DatasetRow(dataset_id=dataset_id, data=payload.data, updated_by=user.id)
     db.add(row)
     db.commit()
@@ -197,7 +139,7 @@ def patch_row(
 
     if payload.data is not None:
         merged_data = {**row.data, **payload.data}
-        _validate_row_data(merged_data, _columns_of(db, dataset_id))
+        validate_row_data(merged_data, _columns_of(db, dataset_id))
         for key, new_value in payload.data.items():
             old_value = row.data.get(key)
             if old_value != new_value:
