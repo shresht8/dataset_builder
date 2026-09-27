@@ -12,6 +12,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from groundline_api.deps import get_db, require_role
@@ -59,6 +60,13 @@ def create_dataset(
         created_by=user.id,
     )
     db.add(dataset)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail=f"dataset name '{payload.name}' already exists",
+        ) from None
     db.refresh(dataset)
     return dataset

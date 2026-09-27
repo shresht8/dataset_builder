@@ -7,9 +7,13 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
+# Key-safe: usable unchanged as an object-key segment, a directory name, and
+# the <name> in name@vN (GL-3-15, §6/§7).
+DATASET_NAME_PATTERN = r"^[a-z0-9][a-z0-9_-]{0,99}$"
+
 
 class DatasetCreate(BaseModel):
-    name: str = Field(min_length=1, max_length=255)
+    name: str = Field(pattern=DATASET_NAME_PATTERN)
     description: str | None = None
     # Optional feature scope, default unscoped (§11 Q3).
     feature_id: str | None = Field(default=None, max_length=255)

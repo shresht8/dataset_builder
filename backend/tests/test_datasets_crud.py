@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import uuid
 
+import pytest
 from groundline_api.db import SessionLocal
 from groundline_api.models.dataset import Dataset
 
@@ -68,3 +69,44 @@ def test_get_dataset_404(client, as_role):
     resp = client.get(f"/v1/datasets/{uuid.uuid4()}")
     assert resp.status_code == 404
     assert resp.json()["detail"] == "dataset not found"
+
+
+def test_duplicate_name_conflict(client, as_role):
+    """GL-3-15: a duplicate name returns 409, not 500."""
+    as_role("editor")
+    tag = uuid.uuid4().hex[:8]
+    name = f"gl315-dup-{tag}"
+    created = []
+    try:
+        resp = client.post("/v1/datasets", json={"name": name})
+        assert resp.status_code == 201, resp.text
+        created.append(resp.json()["id"])
+
+        resp = client.post("/v1/datasets", json={"name": name})
+        assert resp.status_code == 409, resp.text
+        assert resp.json()["detail"] == f"dataset name '{name}' already exists"
+    finally:
+        _cleanup(created)
+
+
+@pytest.mark.parametrize("name", ["Has Space", "a/b", "x@v1", "a.b", ""])
+def test_invalid_name_rejected(client, as_role, name):
+    """GL-3-15: names must match ^[a-z0-9][a-z0-9_-]{0,99}$."""
+    as_role("editor")
+    resp = client.post("/v1/datasets", json={"name": name})
+    assert resp.status_code == 422, resp.text
+
+
+def test_valid_name_created(client, as_role):
+    """GL-3-15: a key-safe name is accepted."""
+    as_role("editor")
+    tag = uuid.uuid4().hex[:8]
+    name = f"gl315-valid-{tag}"
+    created = []
+    try:
+        resp = client.post("/v1/datasets", json={"name": name})
+        assert resp.status_code == 201, resp.text
+        created.append(resp.json()["id"])
+        assert resp.json()["name"] == name
+    finally:
+        _cleanup(created)

@@ -26,6 +26,7 @@ column_type_enum = sa.Enum(
 
 class Dataset(Base):
     __tablename__ = "datasets"
+    __table_args__ = (sa.UniqueConstraint("name", name="uq_datasets_name"),)
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, server_default=sa.text("gen_random_uuid()")
@@ -33,6 +34,8 @@ class Dataset(Base):
     # Nullable for backward compatibility with pre-GL-1-5 rows; no projects
     # table exists, so this is an external identifier, not a foreign key.
     project_id: Mapped[str | None] = mapped_column(sa.String(255), nullable=True)
+    # Unique (GL-3-15): a name identifies exactly one dataset, and is used
+    # unchanged as the snapshot key segment and the CLI's `name@vN` (design §6/§7).
     name: Mapped[str] = mapped_column(sa.String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(sa.Text(), nullable=True)
     feature_id: Mapped[str | None] = mapped_column(sa.String(255), nullable=True)
