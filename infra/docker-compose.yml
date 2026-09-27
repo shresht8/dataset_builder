@@ -44,6 +44,24 @@ services:
       APP_SECRET_KEY: ${APP_SECRET_KEY:-change-me}
       BOOTSTRAP_ADMIN_EMAIL: ${BOOTSTRAP_ADMIN_EMAIL:-admin@example.com}
       PAT_DEFAULT_TTL_DAYS: ${PAT_DEFAULT_TTL_DAYS:-90}
+      # Entra SSO (GL-3-11/GL-3-12). OFF unless AUTH_SSO_ENABLED=true; the
+      # defaults below point at the local mock IdP (`sso-mock` profile) and
+      # are MOCK-ONLY values. Real Entra: see infra/ENTRA-SETUP.md.
+      AUTH_SSO_ENABLED: ${AUTH_SSO_ENABLED:-false}
+      OIDC_DISCOVERY_URL: ${OIDC_DISCOVERY_URL:-http://mock-oidc.localhost:8090/entra/.well-known/openid-configuration}
+      ENTRA_TENANT_ID: ${ENTRA_TENANT_ID:-}
+      ENTRA_CLIENT_ID: ${ENTRA_CLIENT_ID:-groundline-local}
+      ENTRA_CLIENT_SECRET: ${ENTRA_CLIENT_SECRET:-mock-secret}
+      OIDC_REDIRECT_URI: ${OIDC_REDIRECT_URI:-http://localhost:5173/v1/auth/sso/callback}
+      OIDC_SCOPES: ${OIDC_SCOPES:-openid,profile,email}
+      # Mock fixture group GUIDs -> roles. Literal (compose can't put `{}`
+      # in a ${VAR:-default}); for real Entra, replace with your tenant's
+      # group object IDs.
+      ROLE_MAPPING: >-
+        {"a1a1a1a1-0000-4000-8000-000000000001":"admin",
+        "e2e2e2e2-0000-4000-8000-000000000002":"editor",
+        "a3a3a3a3-0000-4000-8000-000000000003":"annotator",
+        "default":"viewer"}
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/v1/health', timeout=3)"]
       interval: 10s
@@ -118,6 +136,28 @@ services:
             s3.create_bucket(Bucket=bucket)
             print(f"bucket created: {bucket}")
     restart: "no"
+
+  # Mock Entra ID (OIDC) for local SSO (GL-3-12). Only with the profile:
+  #   docker compose -f infra/docker-compose.yml --profile sso-mock up -d
+  # Hostname split: the browser (authorize redirect) and the api container
+  # (discovery/token/JWKS) must see the SAME issuer, and this mock derives
+  # the issuer from the request Host. Browsers and curl resolve any
+  # `*.localhost` name to 127.0.0.1, and inside compose the network alias
+  # below resolves to this container; listening on 8090 on both sides makes
+  # `http://mock-oidc.localhost:8090` identical from host and container.
+  # 8090 because 8080 is often taken. MOCK-ONLY - never a real IdP.
+  mock-oidc:
+    image: ghcr.io/navikt/mock-oauth2-server:3.0.1
+    profiles: ["sso-mock"]
+    environment:
+      SERVER_PORT: "8090"
+      JSON_CONFIG: '{"interactiveLogin": true}'
+    ports:
+      - "8090:8090"
+    networks:
+      default:
+        aliases:
+          - mock-oidc.localhost
 
 volumes:
   pgdata:

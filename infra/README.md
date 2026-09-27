@@ -19,7 +19,7 @@ To wipe it, add `-v`: `docker compose -f infra/docker-compose.yml down -v`.
 - Container: `infra-postgres-1`
 - Host port: `localhost:5432`, or `POSTGRES_HOST_PORT` if set in `infra/.env`
   (untracked; compose reads it automatically). Set it when 5432 is taken by
-  another Postgres � if the bind fails, Docker can leave the container running
+  another Postgres � if the bind fails, Docker can leave the container running
   but detached from the compose network, and the api reports
   `database unreachable`. Containers reach Postgres on the network either way;
   only host tools (`make run`, host `psql`) use this port, so match
@@ -210,11 +210,60 @@ All settings are environment variables read by `backend/groundline_api/config.py
 | `APP_SECRET_KEY` | `change-me` | Signs session cookies. **Secret — generate a random value for any non-local deploy.** |
 | `BOOTSTRAP_ADMIN_EMAIL` | `""` (compose default: `admin@example.com`) | If set, the API creates/promotes this admin at startup (idempotent, GL-1-8). |
 | `PAT_DEFAULT_TTL_DAYS` | `90` | Default personal-access-token lifetime. |
-| `ENTRA_TENANT_ID` / `ENTRA_CLIENT_ID` / `ENTRA_CLIENT_SECRET` / `OIDC_REDIRECT_URI` / `OIDC_SCOPES` | empty / `openid,profile,email` | Entra OIDC (§5) — unused until Phase 3 (GL-3-11/GL-3-12). Client secret is a **secret**. |
+| `AUTH_SSO_ENABLED` | `false` | Turns on Entra/OIDC sign-in (GL-3-11). Dev login and PATs keep working alongside it. |
+| `OIDC_DISCOVERY_URL` | empty → derived from `ENTRA_TENANT_ID` (compose default: the mock, **mock-only**) | OIDC discovery document. Leave empty for real Entra. |
+| `ENTRA_TENANT_ID` | empty | Real Entra tenant (used to derive the discovery URL). |
+| `ENTRA_CLIENT_ID` / `ENTRA_CLIENT_SECRET` | empty (compose default: `groundline-local` / `mock-secret`, **mock-only**) | App registration client credentials. Client secret is a **secret**. |
+| `OIDC_REDIRECT_URI` | `http://localhost:5173/v1/auth/sso/callback` | Must go through the **web origin** (Vite dev proxy / the web server), so the post-login redirect to `/` lands in the web app. |
+| `OIDC_SCOPES` | `openid,profile,email` | Requested scopes. The `groups` claim comes from the app registration's token configuration, not a scope. |
+| `ROLE_MAPPING` | `{"default":"viewer"}` (compose: mock fixture GUIDs, **mock-only**) | JSON: Entra group **object ID** → role, plus `default`. Highest-privilege match wins. |
 
 > Note: `.env.example` could not be written from the GL-1-11 session
 > (`.env*` files were permission-blocked); this table is the source of truth
 > until it is mirrored there.
+
+### Local SSO with the mock IdP (GL-3-12)
+
+No Entra tenant is needed for local development: the `sso-mock` profile runs
+[navikt/mock-oauth2-server](https://github.com/navikt/mock-oauth2-server)
+(pinned `3.0.1`) as an Entra stand-in that issues Entra-shaped ID tokens
+(`oid`, `tid`, `email`/`preferred_username`, `name`, `groups` as GUIDs).
+Everything about it is **mock-only**.
+
+```bash
+# start the mock and recreate the api with SSO on (dev login stays on too)
+AUTH_SSO_ENABLED=true docker compose -f infra/docker-compose.yml --profile sso-mock up -d
+npm --prefix web run dev          # http://localhost:5173
+```
+
+On the login page choose "Sign in with Microsoft" (GL-3-11). The mock's login
+page asks for a **username** and optional **claims**. Sign in as one of the
+fixture users in [mock-oidc/fixture-users.json](mock-oidc/fixture-users.json):
+type the username (e.g. `mock-editor`) and paste that user's `claims` object.
+
+| Username | Groups (fake GUIDs) | Role via compose `ROLE_MAPPING` |
+|---|---|---|
+| `mock-admin` | `a1a1a1a1-…-000000000001` | admin |
+| `mock-editor` | `e2e2e2e2-…-000000000002` + an unmapped group | editor |
+| `mock-annotator` | `a3a3a3a3-…-000000000003` | annotator |
+| `mock-viewer` | an unmapped group only; **no `email`** (tests the `preferred_username` fallback) | viewer (default) |
+
+**Hostname split.** The browser follows the authorize redirect, while the
+api container fetches discovery, token and JWKS. This mock derives its
+`iss` from the request Host, so both sides must use the same host:port. The
+mock is therefore reached as `http://mock-oidc.localhost:8090` everywhere:
+browsers and curl resolve any `*.localhost` name to 127.0.0.1 (port 8090 is
+published), and inside compose that name is a network alias of the mock,
+which also listens on 8090. No hosts-file edit is needed. Verified
+2026-09-27: discovery from the host and from `infra-api-1` returns the same
+issuer `http://mock-oidc.localhost:8090/entra` and endpoints.
+
+Caveat: **Windows' own resolver does not resolve `*.localhost`** (browsers
+and curl do it themselves). So a *host-run* API (`make run`) cannot reach the
+mock unless you add `127.0.0.1 mock-oidc.localhost` to the hosts file. Use
+the containerised api (the default above) for SSO.
+
+For the switch to a real tenant, see [ENTRA-SETUP.md](ENTRA-SETUP.md).
 
 ### Secrets
 
@@ -244,7 +293,7 @@ top-level README, "First admin & dev login").
 ### Warning: dev login is not real auth
 
 `AUTH_DEV_LOGIN=true` means **anyone who can reach the API can log in as any
-user by email, no password**. It is the interim auth until Entra OIDC lands in
-Phase 3 (GL-3-11/GL-3-12) and is only legal under `APP_ENV=dev` — the API
+user by email, no password**. It stays on alongside SSO until Entra go-live
+(GL-3-14) switches it off, and is only legal under `APP_ENV=dev` — the API
 refuses to start otherwise. Do not expose a dev-login deployment beyond
 localhost / a trusted network.
