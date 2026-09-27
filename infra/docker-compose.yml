@@ -31,9 +31,11 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      storage-init:
+        condition: service_completed_successfully
     environment:
       DATABASE_URL: postgresql+psycopg://groundline:groundline@postgres:5432/groundline
-      STORAGE_ENDPOINT_URL: http://minio:9000
+      STORAGE_ENDPOINT_URL: http://storage:9000
       STORAGE_BUCKET: ${STORAGE_BUCKET:-groundline}
       STORAGE_ACCESS_KEY: ${STORAGE_ACCESS_KEY:-minioadmin}
       STORAGE_SECRET_KEY: ${STORAGE_SECRET_KEY:-minioadmin}
@@ -49,19 +51,74 @@ services:
       retries: 5
       start_period: 15s
 
-  # S3-compatible object storage for version snapshots (§6)
-  minio:
-    image: minio/minio
-    command: server /data --console-address ":9001"
+  # S3-compatible object storage for version snapshots (§6). Was MinIO;
+  # switched to RustFS 2026-09-27 because `minio/minio` is no longer
+  # pullable (see infra/README.md for details).
+  storage:
+    image: rustfs/rustfs:1.0.0
     environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
+      RUSTFS_ACCESS_KEY: ${STORAGE_ACCESS_KEY:-minioadmin}
+      RUSTFS_SECRET_KEY: ${STORAGE_SECRET_KEY:-minioadmin}
+      RUSTFS_VOLUMES: /data
+      RUSTFS_ADDRESS: 0.0.0.0:9000
+      RUSTFS_CONSOLE_ADDRESS: 0.0.0.0:9001
+      RUSTFS_CONSOLE_ENABLE: "true"
     ports:
       - "9000:9000"
       - "9001:9001"
     volumes:
-      - miniodata:/data
+      - storagedata:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # One-shot bucket provisioning (GL-3-1, C1). App code never creates
+  # buckets: this container creates the snapshot bucket, then exits 0.
+  # Re-running `make db-up` is safe (head_bucket + create-if-missing).
+  #
+  # Uses boto3 (already a backend dependency, see backend/pyproject.toml)
+  # inside the api image instead of an S3 client image: `minio/mc` has been
+  # pulled from Docker Hub and its quay.io replacement requires registry
+  # login, so neither pulls anonymously. RustFS ships no equivalent CLI
+  # image either, so this approach stands regardless of which S3-compatible
+  # server backs `storage`.
+  storage-init:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile
+    depends_on:
+      storage:
+        condition: service_healthy
+    environment:
+      STORAGE_ENDPOINT_URL: http://storage:9000
+      STORAGE_BUCKET: ${STORAGE_BUCKET:-groundline}
+      STORAGE_ACCESS_KEY: ${STORAGE_ACCESS_KEY:-minioadmin}
+      STORAGE_SECRET_KEY: ${STORAGE_SECRET_KEY:-minioadmin}
+    command:
+      - python
+      - -c
+      - |
+        import os
+        import boto3
+        from botocore.exceptions import ClientError
+
+        s3 = boto3.client(
+            "s3",
+            endpoint_url=os.environ["STORAGE_ENDPOINT_URL"],
+            aws_access_key_id=os.environ["STORAGE_ACCESS_KEY"],
+            aws_secret_access_key=os.environ["STORAGE_SECRET_KEY"],
+        )
+        bucket = os.environ["STORAGE_BUCKET"]
+        try:
+            s3.head_bucket(Bucket=bucket)
+            print(f"bucket exists: {bucket}")
+        except ClientError:
+            s3.create_bucket(Bucket=bucket)
+            print(f"bucket created: {bucket}")
+    restart: "no"
 
 volumes:
   pgdata:
-  miniodata:
+  storagedata:
