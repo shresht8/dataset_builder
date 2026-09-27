@@ -352,3 +352,48 @@ td.grid-cell select {
   flex-wrap: wrap;
   gap: 8px;
 }
+
+.versions-panel {
+  background: #fff;
+  margin: auto;
+  width: 90%;
+  max-width: 720px;
+  max-height: 90vh;
+  overflow-y: auto;
+  padding: 20px;
+  border-radius: 6px;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.3);
+}
+
+.cut-version-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  padding: 12px;
+  margin-bottom: 16px;
+}
+
+.cut-version-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.cut-version-form .checkbox-label {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+}
+
+.cut-version-form textarea {
+  min-height: 80px;
+  font: inherit;
+  padding: 8px;
+}
+
+.version-hash {
+  font-family: ui-monospace, monospace;
+  cursor: help;
+}
