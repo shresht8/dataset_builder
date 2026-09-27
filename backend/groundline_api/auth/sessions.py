@@ -6,8 +6,10 @@ Cookie value is `<user_id>.<expires_epoch>.<hmac_sha256_hex>` signed with
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
+import json
 import time
 import uuid
 
@@ -26,6 +28,28 @@ def _signature(payload: str) -> str:
 def create_session(user_id: uuid.UUID) -> str:
     payload = f"{user_id}.{int(time.time()) + SESSION_TTL_SECONDS}"
     return f"{payload}.{_signature(payload)}"
+
+
+def sign_data(data: dict, ttl_seconds: int) -> str:
+    """Signed, expiring cookie value for small JSON data (GL-3-11 SSO state)."""
+    body = base64.urlsafe_b64encode(
+        json.dumps({**data, "exp": int(time.time()) + ttl_seconds}).encode()
+    ).decode()
+    return f"{body}.{_signature(body)}"
+
+
+def read_signed_data(value: str) -> dict | None:
+    """The data from `sign_data`, or None if tampered, malformed or expired."""
+    body, _, signature = value.rpartition(".")
+    if not body or not hmac.compare_digest(signature, _signature(body)):
+        return None
+    try:
+        data = json.loads(base64.urlsafe_b64decode(body))
+    except ValueError:
+        return None
+    if not isinstance(data, dict) or data.get("exp", 0) < time.time():
+        return None
+    return data
 
 
 def resolve_session(value: str) -> uuid.UUID | None:

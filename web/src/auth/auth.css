@@ -1,0 +1,17 @@
+/* Login page additions for SSO (GL-3-11). Base .login-* rules live in index.css. */
+.login-form form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sso-button {
+  padding: 8px;
+  font-weight: 600;
+}
+
+.login-divider {
+  margin: 4px 0;
+  text-align: center;
+  color: #666;
+}

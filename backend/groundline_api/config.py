@@ -21,6 +21,12 @@ class Settings(BaseSettings):
     entra_client_secret: str = ""
     oidc_redirect_uri: str = ""
     oidc_scopes: str = "openid,profile,email"
+    # GL-3-11: Entra SSO alongside dev login. Empty discovery URL -> derived
+    # from entra_tenant_id. role_mapping is JSON: group object ID -> role,
+    # plus "default" (design §5, PRD open decision 6).
+    auth_sso_enabled: bool = False
+    oidc_discovery_url: str = ""
+    role_mapping: str = '{"default": "viewer"}'
 
     pat_default_ttl_days: int = 90
     # Signs session cookies (GL-1-9). The default is for local dev only.
