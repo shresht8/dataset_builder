@@ -1,8 +1,8 @@
 // Versions view + cut dialog (design §4, §6, GL-3-4). Lists past versions
 // (viewer+) and, for editors/admins, cuts a new one from the current draft.
 // Versions are immutable: there is no edit or delete action anywhere here.
-// Escape closes it, same pattern as ImportWizard/CommentsPanel.
-import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
+// Escape closes it wherever focus is (document listener while open).
+import { useEffect, useRef, useState } from 'react'
 import { ApiError, cutVersion, listVersions } from '../api/client'
 import type { VersionRead } from '../api/types'
 
@@ -35,12 +35,25 @@ export function VersionsPanel({ datasetId, canCut, onClose }: VersionsPanelProps
 
   useEffect(reload, [datasetId])
 
+  // Focus lands in the notes field (or the dialog itself when there is no cut
+  // form) on open and again after each cut. It waits for `busy` to clear:
+  // a disabled field can't take focus, and the disabled Cut button drops it.
   useEffect(() => {
-    // Without the cut form there's no field to focus; focus the dialog itself
-    // so Escape reaches handleKeyDown and keys don't drive the grid behind it.
+    if (busy) return
     if (canCut) noteRef.current?.focus()
     else dialogRef.current?.focus()
-  }, [canCut])
+  }, [busy, canCut])
+
+  useEffect(() => {
+    function onKeyDown(event: globalThis.KeyboardEvent) {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        onClose()
+      }
+    }
+    document.addEventListener('keydown', onKeyDown)
+    return () => document.removeEventListener('keydown', onKeyDown)
+  }, [onClose])
 
   async function handleCut() {
     setBusy(true)
@@ -52,7 +65,6 @@ export function VersionsPanel({ datasetId, canCut, onClose }: VersionsPanelProps
       })
       setVersions((prev) => [created, ...(prev ?? [])])
       setNotes('')
-      noteRef.current?.focus()
     } catch (err) {
       setCutError(err instanceof ApiError ? err.message : 'Could not cut version')
     } finally {
@@ -60,15 +72,8 @@ export function VersionsPanel({ datasetId, canCut, onClose }: VersionsPanelProps
     }
   }
 
-  function handleKeyDown(event: KeyboardEvent<HTMLDivElement>) {
-    if (event.key === 'Escape') {
-      event.preventDefault()
-      onClose()
-    }
-  }
-
   return (
-    <div className="drawer-backdrop" onKeyDown={handleKeyDown}>
+    <div className="drawer-backdrop">
       <div ref={dialogRef} tabIndex={-1} className="versions-panel" role="dialog" aria-modal="true" aria-label="Versions">
         <div className="drawer-header">
           <span>Versions</span>
