@@ -7,8 +7,9 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class VersionCut(BaseModel):
@@ -29,4 +30,43 @@ class VersionRead(BaseModel):
     created_at: datetime
 
 
-# TODO GL-3-6: VersionDiff
+class DiffRow(BaseModel):
+    id: uuid.UUID
+    status: str
+    data: dict[str, Any]
+
+
+class StatusChange(BaseModel):
+    old: str
+    new: str
+
+
+class FieldChange(BaseModel):
+    field: str
+    old: Any
+    new: Any
+
+
+class ModifiedRow(BaseModel):
+    id: uuid.UUID
+    status: StatusChange | None
+    changes: list[FieldChange]
+
+
+class SchemaChanges(BaseModel):
+    added: list[str]
+    removed: list[str]
+    changed: list[str]
+
+
+class VersionDiff(BaseModel):
+    """Rows matched by id; a field absent on one side reads as null (C3)."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    from_: int = Field(alias="from")
+    to: int
+    added: list[DiffRow]
+    removed: list[DiffRow]
+    modified: list[ModifiedRow]
+    schema_changes: SchemaChanges

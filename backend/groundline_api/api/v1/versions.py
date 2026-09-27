@@ -24,7 +24,8 @@ from groundline_api.deps import get_db, require_role
 from groundline_api.models.dataset import Dataset
 from groundline_api.models.user import Role, User
 from groundline_api.models.version import DatasetVersion
-from groundline_api.schemas.version import VersionCut, VersionRead
+from groundline_api.schemas.version import VersionCut, VersionDiff, VersionRead
+from groundline_api.services import diff as diff_service
 from groundline_api.services import export, storage
 from groundline_api.services.versioning import EmptySelectionError, cut_version
 
@@ -100,6 +101,39 @@ def list_versions(
     return [_to_read(version, email) for version, email in rows]
 
 
+@router.get("/{dataset_id}/versions/diff", response_model=VersionDiff)
+def diff_versions(
+    dataset_id: uuid.UUID,
+    db: Annotated[Session, Depends(get_db)],
+    _user: Annotated[User, Depends(require_role(Role.VIEWER))],
+    from_: Annotated[int, Query(alias="from")],
+    to: Annotated[int, Query()],
+) -> VersionDiff:
+    """Diff two versions' stored snapshots (C3). Never reads live rows."""
+    dataset = _get_dataset_or_404(db, dataset_id)
+    from_version = _get_version_or_404(db, dataset_id, from_)
+    to_version = _get_version_or_404(db, dataset_id, to)
+
+    from_rows = export.parse_rows_jsonl(
+        storage.get_object(
+            settings.storage_bucket, f"datasets/{dataset.name}/v{from_}/rows.jsonl"
+        )
+    )
+    to_rows = export.parse_rows_jsonl(
+        storage.get_object(
+            settings.storage_bucket, f"datasets/{dataset.name}/v{to}/rows.jsonl"
+        )
+    )
+
+    result = diff_service.diff_versions(
+        from_rows,
+        to_rows,
+        from_version.schema_snapshot["columns"],
+        to_version.schema_snapshot["columns"],
+    )
+    return VersionDiff(from_=from_, to=to, **result)
+
+
 # NOTE: GL-3-6 must declare GET /{dataset_id}/versions/diff above this route,
 # or "diff" matches the {v}: int path converter and 422s (C3 route order).
 @router.get("/{dataset_id}/versions/{v}/manifest")
@@ -153,6 +187,3 @@ def export_version(
     if format == "json":
         return Response(content=export.export_json(manifest, rows), media_type="application/json")
     return Response(content=export.export_yaml(manifest, rows), media_type="application/yaml")
-
-
-# TODO GL-3-6: diff_versions
