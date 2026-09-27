@@ -16,6 +16,10 @@ class SnapshotExistsError(RuntimeError):
     """An object already exists at a version's key (C2 immutability guard)."""
 
 
+class ObjectNotFoundError(RuntimeError):
+    """No object exists at the given key."""
+
+
 def _client():
     return boto3.client(
         "s3",
@@ -43,3 +47,15 @@ def put_snapshot(bucket: str, prefix: str, files: dict[str, bytes]) -> None:
             if status == 412:
                 raise SnapshotExistsError(key) from exc
             raise
+
+
+def get_object(bucket: str, key: str) -> bytes:
+    """Read one stored object's bytes (GL-3-3: reads pull from storage, not DB)."""
+    client = _client()
+    try:
+        return client.get_object(Bucket=bucket, Key=key)["Body"].read()
+    except ClientError as exc:
+        status = exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
+        if status == 404:
+            raise ObjectNotFoundError(key) from exc
+        raise

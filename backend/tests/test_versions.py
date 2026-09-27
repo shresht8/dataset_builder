@@ -17,6 +17,7 @@ from groundline_api.config import settings
 from groundline_api.db import SessionLocal
 from groundline_api.models.dataset import Dataset
 from groundline_api.models.user import User
+from groundline_api.models.version import DatasetVersion
 from groundline_api.services.versioning import EmptySelectionError, cut_version
 
 COLUMNS = [
@@ -207,6 +208,158 @@ def test_include_unapproved_includes_drafts_with_status(client, as_role, dataset
     )
     assert resp.status_code == 201, resp.text
     assert resp.json()["row_count"] == 2
+
+
+def test_list_versions_newest_first_with_metadata(client, as_role, dataset_id):
+    as_role("annotator")
+    _create_row(client, dataset_id, {"input": "one"})
+
+    editor = as_role("editor")
+    first = client.post(f"/v1/datasets/{dataset_id}/versions", json={"notes": "v1 notes"})
+    assert first.status_code == 201, first.text
+    second = client.post(f"/v1/datasets/{dataset_id}/versions", json={"notes": "v2 notes"})
+    assert second.status_code == 201, second.text
+
+    as_role("viewer")
+    resp = client.get(f"/v1/datasets/{dataset_id}/versions")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert [v["version"] for v in body] == [2, 1]
+    assert body[0]["notes"] == "v2 notes"
+    assert body[1]["notes"] == "v1 notes"
+    assert body[0]["created_by_email"] == editor["email"]
+    assert body[0]["content_hash"].startswith("sha256:")
+    assert body[0]["row_count"] == 1
+
+
+def test_list_versions_404_for_missing_dataset(client, as_role):
+    as_role("viewer")
+    resp = client.get(f"/v1/datasets/{uuid.uuid4()}/versions")
+    assert resp.status_code == 404, resp.text
+
+
+def test_manifest_round_trips_through_shared_model(client, as_role, dataset_id):
+    from groundline_schema.manifest import Manifest
+
+    as_role("annotator")
+    _create_row(client, dataset_id, {"input": "hi", "score": 3})
+
+    as_role("editor")
+    cut_resp = client.post(f"/v1/datasets/{dataset_id}/versions", json={"notes": "for manifest"})
+    assert cut_resp.status_code == 201, cut_resp.text
+    version_body = cut_resp.json()
+
+    as_role("viewer")
+    resp = client.get(f"/v1/datasets/{dataset_id}/versions/{version_body['version']}/manifest")
+    assert resp.status_code == 200, resp.text
+    assert resp.headers["content-type"].startswith("application/json")
+
+    manifest = Manifest.model_validate_json(resp.text)
+    assert manifest.version == version_body["version"]
+    assert manifest.content_hash == version_body["content_hash"]
+    assert manifest.row_count == version_body["row_count"]
+    assert manifest.notes == "for manifest"
+
+
+def test_manifest_404_for_missing_version(client, as_role, dataset_id):
+    as_role("viewer")
+    resp = client.get(f"/v1/datasets/{dataset_id}/versions/999/manifest")
+    assert resp.status_code == 404, resp.text
+
+
+def test_manifest_404_for_missing_dataset(client, as_role):
+    as_role("viewer")
+    resp = client.get(f"/v1/datasets/{uuid.uuid4()}/versions/1/manifest")
+    assert resp.status_code == 404, resp.text
+
+
+def test_no_endpoint_mutates_or_deletes_a_version(client, as_role, dataset_id, storage_bucket):
+    as_role("annotator")
+    row = _create_row(client, dataset_id, {"input": "immutable", "score": 1})
+
+    as_role("editor")
+    dataset_name = client.get(f"/v1/datasets/{dataset_id}").json()["name"]
+    cut_resp = client.post(f"/v1/datasets/{dataset_id}/versions", json={"notes": "orig"})
+    assert cut_resp.status_code == 201, cut_resp.text
+    version_num = cut_resp.json()["version"]
+
+    before_manifest = _get_object(storage_bucket, dataset_name, version_num, "manifest.json")
+    before_rows = _get_object(storage_bucket, dataset_name, version_num, "rows.jsonl")
+
+    db = SessionLocal()
+    try:
+        before_row = db.get(DatasetVersion, uuid.UUID(cut_resp.json()["id"]))
+        before_hash = before_row.content_hash
+        before_count = before_row.row_count
+    finally:
+        db.close()
+
+    base = f"/v1/datasets/{dataset_id}/versions/{version_num}"
+    for verb, path in [
+        ("put", base),
+        ("patch", base),
+        ("delete", base),
+        ("put", f"{base}/manifest"),
+        ("patch", f"{base}/manifest"),
+        ("delete", f"{base}/manifest"),
+    ]:
+        if verb == "delete":
+            resp = client.delete(path)
+        else:
+            resp = getattr(client, verb)(path, json={"notes": "hacked"})
+        assert resp.status_code in (404, 405), f"{verb} {path} -> {resp.status_code}"
+
+    # Approve more rows and cut again; the earlier version's stored objects and
+    # DB row must be untouched (reads pull from the stored snapshot, not live rows).
+    as_role("annotator")
+    _create_row(client, dataset_id, {"input": "added-after", "score": 2})
+    as_role("editor")
+    client.patch(
+        f"/v1/datasets/{dataset_id}/rows/{row['id']}",
+        json={"data": {"input": "changed", "score": 99}},
+        headers={"If-Match": str(row["rev"])},
+    )
+
+    after_manifest = _get_object(storage_bucket, dataset_name, version_num, "manifest.json")
+    after_rows = _get_object(storage_bucket, dataset_name, version_num, "rows.jsonl")
+    assert after_manifest == before_manifest
+    assert after_rows == before_rows
+
+    db = SessionLocal()
+    try:
+        after_row = db.get(DatasetVersion, uuid.UUID(cut_resp.json()["id"]))
+        assert after_row.content_hash == before_hash
+        assert after_row.row_count == before_count
+    finally:
+        db.close()
+
+    as_role("viewer")
+    manifest_resp = client.get(f"{base}/manifest")
+    assert manifest_resp.content == before_manifest
+
+
+def test_pat_can_list_versions_and_fetch_manifest(client, as_role, dataset_id):
+    as_role("annotator")
+    _create_row(client, dataset_id, {"input": "pat-check"})
+
+    as_role("editor")
+    cut_resp = client.post(f"/v1/datasets/{dataset_id}/versions", json={})
+    assert cut_resp.status_code == 201, cut_resp.text
+    version_num = cut_resp.json()["version"]
+
+    as_role("viewer")
+    raw = client.post("/v1/auth/tokens", json={"name": "gl3-3-pat"}).json()["token"]
+    client.cookies.clear()
+
+    headers = {"Authorization": f"Bearer {raw}"}
+    list_resp = client.get(f"/v1/datasets/{dataset_id}/versions", headers=headers)
+    assert list_resp.status_code == 200, list_resp.text
+    assert any(v["version"] == version_num for v in list_resp.json())
+
+    manifest_resp = client.get(
+        f"/v1/datasets/{dataset_id}/versions/{version_num}/manifest", headers=headers
+    )
+    assert manifest_resp.status_code == 200, manifest_resp.text
 
 
 def test_empty_selection_does_not_leave_a_version_row(client, as_role, dataset_id):
