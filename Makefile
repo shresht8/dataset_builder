@@ -15,8 +15,12 @@ migrate:
 run:
 	uvicorn groundline_api.main:app --reload --app-dir backend
 
+# backend/tests and cli/tests are both packages named `tests`, so one pytest
+# run can't collect them together; run each suite on its own. (shared/ has no
+# tests; its JSON Schema tests live in backend/tests/test_jsonschema.py.)
 test:
-	pytest backend cli shared
+	pytest backend
+	pytest cli
 
 lint:
 	ruff check backend cli shared
