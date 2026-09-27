@@ -77,10 +77,23 @@ def test_bad_pull_target_syntax_gives_clean_error(monkeypatch):
     assert "Traceback" not in result.output
 
 
-def test_pull_lock_not_implemented(monkeypatch):
+def test_pull_lock_and_target_is_usage_error(monkeypatch):
     _base_env(monkeypatch)
 
-    result = runner.invoke(app, ["pull", "--lock"])
+    result = runner.invoke(app, ["pull", "demo@v1", "--lock"])
 
     assert result.exit_code != 0
-    assert "not yet implemented" in result.output
+    assert "cannot be combined" in result.output
+    assert "Traceback" not in result.output
+
+
+def test_pull_lock_missing_lock_file_gives_clean_error(monkeypatch, tmp_path):
+    _base_env(monkeypatch)
+
+    result = runner.invoke(
+        app, ["pull", "--lock", "--lock-file", str(tmp_path / "groundline.lock")]
+    )
+
+    assert result.exit_code != 0
+    assert "lock file not found" in result.output
+    assert "Traceback" not in result.output
