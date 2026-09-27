@@ -17,7 +17,13 @@ To wipe it, add `-v`: `docker compose -f infra/docker-compose.yml down -v`.
 ## Postgres
 
 - Container: `infra-postgres-1`
-- Host port: `localhost:5432`
+- Host port: `localhost:5432`, or `POSTGRES_HOST_PORT` if set in `infra/.env`
+  (untracked; compose reads it automatically). Set it when 5432 is taken by
+  another Postgres — if the bind fails, Docker can leave the container running
+  but detached from the compose network, and the api reports
+  `database unreachable`. Containers reach Postgres on the network either way;
+  only host tools (`make run`, host `psql`) use this port, so match
+  `DATABASE_URL` in the root `.env` to it.
 - User / password / database: `groundline` / `groundline` / `groundline`
 
 Connection string for the app (`DATABASE_URL` in `.env`):

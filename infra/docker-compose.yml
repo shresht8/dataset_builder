@@ -6,8 +6,10 @@ services:
       POSTGRES_USER: groundline
       POSTGRES_PASSWORD: groundline
       POSTGRES_DB: groundline
+    # Host port only matters for tools outside compose (make run, psql). If
+    # 5432 is taken on your machine, set POSTGRES_HOST_PORT in infra/.env.
     ports:
-      - "5432:5432"
+      - "${POSTGRES_HOST_PORT:-5432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
