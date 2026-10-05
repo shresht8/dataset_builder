@@ -28,3 +28,12 @@ htmlcov/
 
 #docs
 docs/
+
+.local/
+.codegraph/
+.codex/
+.mcp.json
+*.log
+
+# Local-only compose overrides (per-machine port remaps)
+infra/docker-compose.override.yml

@@ -11,6 +11,7 @@ import type {
   RowStatus,
   Schema,
   User,
+  VersionRead,
 } from './types'
 
 export class ApiError extends Error {
@@ -147,6 +148,23 @@ async function apiFetchForm<T>(path: string, form: FormData): Promise<T> {
     throw new ApiError(response.status, body?.detail ?? response.statusText, body)
   }
   return response.json() as Promise<T>
+}
+
+// Versions (§6, §8, GL-3-2/3/4): cutting is editor+ only, listing is viewer+.
+export function listVersions(datasetId: string): Promise<VersionRead[]> {
+  return apiFetch<VersionRead[]>(`/datasets/${datasetId}/versions`)
+}
+
+export interface VersionCutPayload {
+  notes: string | null
+  include_unapproved: boolean
+}
+
+export function cutVersion(datasetId: string, payload: VersionCutPayload): Promise<VersionRead> {
+  return apiFetch<VersionRead>(`/datasets/${datasetId}/versions`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
 }
 
 // Import preview (§4, GL-2-9): parses the upload only, persists nothing.

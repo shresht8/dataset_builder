@@ -1,6 +1,12 @@
 {
   "datasets": {
-    "claims-eligibility": {"version": 3, "content_hash": "sha256:a3f9c2…"},
-    "claims-appeals":     {"version": 1, "content_hash": "sha256:71ba0e…"}
+    "claims-appeals": {
+      "version": 1,
+      "content_hash": "sha256:d76428f6be8afb322c8bb5d6906b1793351f987849a8f5e78332bee02fcab116"
+    },
+    "claims-eligibility": {
+      "version": 3,
+      "content_hash": "sha256:6592ac9c937d10bec00c2293c7ef2b5bffd2c7844f6b083fbdd57bcfe7fb46e7"
+    }
   }
 }

@@ -1,0 +1,48 @@
+{
+  "_comment": "MOCK-ONLY fixture users for the sso-mock profile (GL-3-12). On the mock login page, type the username and paste that user's `claims` object into the claims box. Group IDs are fake GUIDs that match ROLE_MAPPING in infra/docker-compose.yml.",
+  "users": {
+    "mock-admin": {
+      "claims": {
+        "oid": "0a0a0a0a-1111-4000-8000-000000000001",
+        "tid": "7e57e57e-0000-4000-8000-000000000000",
+        "email": "mock.admin@groundline.test",
+        "preferred_username": "mock.admin@groundline.test",
+        "name": "Mock Admin",
+        "groups": ["a1a1a1a1-0000-4000-8000-000000000001"]
+      },
+      "expected_role": "admin"
+    },
+    "mock-editor": {
+      "claims": {
+        "oid": "0a0a0a0a-1111-4000-8000-000000000002",
+        "tid": "7e57e57e-0000-4000-8000-000000000000",
+        "email": "mock.editor@groundline.test",
+        "preferred_username": "mock.editor@groundline.test",
+        "name": "Mock Editor",
+        "groups": ["e2e2e2e2-0000-4000-8000-000000000002", "99999999-0000-4000-8000-000000000009"]
+      },
+      "expected_role": "editor"
+    },
+    "mock-annotator": {
+      "claims": {
+        "oid": "0a0a0a0a-1111-4000-8000-000000000003",
+        "tid": "7e57e57e-0000-4000-8000-000000000000",
+        "email": "mock.annotator@groundline.test",
+        "preferred_username": "mock.annotator@groundline.test",
+        "name": "Mock Annotator",
+        "groups": ["a3a3a3a3-0000-4000-8000-000000000003"]
+      },
+      "expected_role": "annotator"
+    },
+    "mock-viewer": {
+      "claims": {
+        "oid": "0a0a0a0a-1111-4000-8000-000000000004",
+        "tid": "7e57e57e-0000-4000-8000-000000000000",
+        "preferred_username": "mock.viewer@groundline.test",
+        "name": "Mock Viewer (no mapped group)",
+        "groups": ["99999999-0000-4000-8000-000000000009"]
+      },
+      "expected_role": "viewer"
+    }
+  }
+}

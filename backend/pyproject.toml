@@ -13,6 +13,7 @@ dependencies = [
     "psycopg[binary]",
     "alembic",
     "authlib",            # OIDC / PKCE (§5)
+    "httpx",              # OIDC discovery/token/JWKS calls (GL-3-11)
     "boto3",              # S3-compatible snapshot storage (§6)
     "python-multipart",   # multipart import upload (§4)
     "openpyxl",           # XLSX import (§4)
@@ -20,7 +21,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest", "httpx", "ruff"]
+dev = ["pytest", "httpx", "ruff", "jsonschema"]
 
 [build-system]
 requires = ["hatchling"]

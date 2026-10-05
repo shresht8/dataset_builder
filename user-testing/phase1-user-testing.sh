@@ -77,8 +77,9 @@ echo
 echo "================================================================"
 echo " 6. Data model — editor creates a dataset"
 echo "================================================================"
+DEMO_NAME="demo-$(date +%s)"
 DID=$(curl -s -b editor.txt -X POST $BASE/v1/datasets -H "$CT" \
-      -d '{"name":"demo","description":"test dataset"}' | tee /dev/stderr | json_field id)
+      -d "{\"name\":\"$DEMO_NAME\",\"description\":\"test dataset\"}" | tee /dev/stderr | json_field id)
 echo
 echo "dataset id = $DID"
 

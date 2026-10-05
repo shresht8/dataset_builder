@@ -22,6 +22,7 @@ import { ConflictDialog } from './ConflictDialog'
 import { DetailDrawer } from './DetailDrawer'
 import { FilterBar } from './FilterBar'
 import { ImportWizard } from './ImportWizard'
+import { VersionsPanel } from './VersionsPanel'
 import { AssigneeControl, StatusControl } from './Workflow'
 import {
   BUILTIN_VIEWS,
@@ -104,6 +105,7 @@ export function DatasetPage() {
   const [searchInput, setSearchInput] = useState(DEFAULT_VIEW.filters.q ?? '')
   const [customViews, setCustomViews] = useState<SavedView[]>([])
   const [importOpen, setImportOpen] = useState(false)
+  const [versionsOpen, setVersionsOpen] = useState(false)
   const cellRefs = useRef(new Map<string, HTMLTableCellElement>())
 
   useEffect(() => {
@@ -473,6 +475,9 @@ export function DatasetPage() {
             Import
           </button>
         )}
+        <button type="button" onClick={() => setVersionsOpen(true)}>
+          Versions
+        </button>
       </div>
       <FilterBar
         filters={filters}
@@ -609,6 +614,9 @@ export function DatasetPage() {
           onClose={() => setImportOpen(false)}
           onImported={reloadRows}
         />
+      )}
+      {versionsOpen && datasetId && (
+        <VersionsPanel datasetId={datasetId} canCut={canImport} onClose={() => setVersionsOpen(false)} />
       )}
     </div>
   )

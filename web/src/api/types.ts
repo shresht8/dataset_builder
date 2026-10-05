@@ -112,3 +112,16 @@ export interface ImportCommitResponse {
   skipped: number
   errors: ImportValidationError[]
 }
+
+// Mirrors backend/groundline_api/schemas/version.py (§6, §8, GL-3-2/3).
+export interface VersionRead {
+  id: string
+  dataset_id: string
+  version: number
+  content_hash: string // "sha256:<64 hex>"
+  row_count: number
+  notes: string | null
+  created_by: string | null
+  created_by_email: string | null
+  created_at: string
+}

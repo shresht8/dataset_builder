@@ -76,6 +76,7 @@ body {
 
 .notice {
   background: #fff3cd;
+  color: #1f2937; /* light box: keep dark text in dark mode too */
   border: 1px solid #ffe08a;
   padding: 8px 12px;
   border-radius: 4px;
@@ -145,7 +146,9 @@ td.grid-cell select {
 }
 
 .drawer {
-  background: #fff;
+  /* system colors follow color-scheme, so text stays readable in dark mode */
+  background: Canvas;
+  color: CanvasText;
   width: 480px;
   max-width: 100%;
   height: 100%;
@@ -226,6 +229,7 @@ td.grid-cell select {
 
 .hint {
   background: #eef2ff;
+  color: #1f2937; /* light box: keep dark text in dark mode too */
   border: 1px solid #c7d2fe;
   padding: 8px 12px;
   border-radius: 4px;
@@ -242,7 +246,9 @@ td.grid-cell select {
 }
 
 .conflict-dialog {
-  background: #fff;
+  /* system colors follow color-scheme, so text stays readable in dark mode */
+  background: Canvas;
+  color: CanvasText;
   margin: auto;
   max-width: 560px;
   width: 90%;
@@ -317,7 +323,9 @@ td.grid-cell select {
 }
 
 .import-wizard {
-  background: #fff;
+  /* system colors follow color-scheme, so text stays readable in dark mode */
+  background: Canvas;
+  color: CanvasText;
   margin: auto;
   width: 90%;
   max-width: 720px;
@@ -351,4 +359,56 @@ td.grid-cell select {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+.versions-panel {
+  /* system colors follow color-scheme, so text stays readable in dark mode */
+  background: Canvas;
+  color: CanvasText;
+  margin: auto;
+  width: 90%;
+  max-width: 720px;
+  max-height: 90vh;
+  overflow-y: auto;
+  padding: 20px;
+  border-radius: 6px;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.3);
+}
+
+.cut-version-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  padding: 12px;
+  margin-bottom: 16px;
+}
+
+.cut-version-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.cut-version-form .checkbox-label {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+}
+
+.cut-version-form textarea {
+  min-height: 80px;
+  font: inherit;
+  padding: 8px;
+}
+
+/* Long author emails would otherwise push the table past the dialog. */
+.versions-panel .import-table td {
+  overflow-wrap: anywhere;
+}
+
+.version-hash {
+  font-family: ui-monospace, monospace;
+  cursor: help;
 }
