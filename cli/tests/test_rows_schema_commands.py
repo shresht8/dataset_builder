@@ -321,6 +321,23 @@ def test_rows_push_sends_state_and_refreshes_it(env, install_transport):
     assert after["bases"]["b"] == before["bases"]["b"]  # server-newer keeps its old state
 
 
+def test_rows_push_of_another_file_keeps_this_files_state(env, install_transport):
+    api = FakeApi(sync_result=_result(created=1, revs={"c": 1}, bases={"c": "sha256:c"}))
+    install_transport(api)
+    runner.invoke(app, ["rows", "pull", "demo", "-o", "demo.yaml"])
+    before = json.loads(state_path(env / "demo.yaml", "demo").read_text())
+    (env / "fix.yaml").write_text("- {id: c, question: q}\n")
+
+    result = runner.invoke(app, ["rows", "push", "demo", "fix.yaml"])
+    assert result.exit_code == 0, result.output
+    assert json.loads(state_path(env / "demo.yaml", "demo").read_text()) == before
+    assert json.loads(state_path(env / "fix.yaml", "demo").read_text())["revs"] == {"c": 1}
+
+    runner.invoke(app, ["rows", "push", "demo", "demo.yaml"])
+    form = _form(api.calls("POST", "/v1/datasets/ds1/sync")[-1])
+    assert json.loads(form["revs"]) == before["revs"]
+
+
 def test_rows_push_conflict_exits_1_and_keeps_state(env, install_transport):
     conflict = {"key": "a", "row_id": "r1", "server_rev": 5, "your_rev": 3,
                 "fields": {"question": {"server": "ui", "file": "mine"}}}

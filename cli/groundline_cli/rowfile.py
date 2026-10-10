@@ -2,9 +2,11 @@
 
 Records are written exactly as the user keeps them: nested from dotted column
 keys, key column first then schema order, nothing Groundline-specific inside.
-Row revs and base hashes go to a state file beside the output::
+Row revs and base hashes go to a state file beside the output, one per
+dataset and rows file (pushing another file to the same dataset, e.g. a fix-up
+or a wrong file, leaves this file's state alone)::
 
-    <dir>/.groundline/rows/<dataset>.json
+    <dir>/.groundline/rows/<dataset>/<file name>.json
     {"dataset_id", "key_column", "file", "revs": {key: rev},
      "bases": {key: row_hash}, "pulled_at"}
 
@@ -143,7 +145,7 @@ def _existing_document(path: Path) -> Any:
 
 
 def state_path(rows_file: Path, dataset: str) -> Path:
-    return rows_file.parent / ".groundline" / "rows" / f"{dataset}.json"
+    return rows_file.parent / ".groundline" / "rows" / dataset / f"{rows_file.name}.json"
 
 
 def load_state(rows_file: Path, dataset: str, dataset_id: str) -> dict | None:
