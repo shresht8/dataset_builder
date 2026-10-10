@@ -4,8 +4,18 @@
 // construction — there is no free-text path for select/multi_select.
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import type { Column } from '../api/types'
+import { isDate } from './dates'
+import { formatJson, summarizeJson } from './json'
 
 export function CellDisplay({ column, value }: { column: Column; value: unknown }) {
+  if (column.type === 'json') {
+    // One-line summary; the full value is in the tooltip and the drawer.
+    return (
+      <span className="cell-json" title={value === null || value === undefined ? undefined : formatJson(value)}>
+        {summarizeJson(value)}
+      </span>
+    )
+  }
   if (column.type === 'multi_select') {
     return <span>{Array.isArray(value) ? value.join(', ') : ''}</span>
   }
@@ -26,6 +36,9 @@ interface EditorProps {
 /** Text, number, and select editors — all commit/cancel via the grid's
  * shared Enter/Escape/Tab handling in DatasetPage. */
 export function CellEditor({ column, draft, onDraftChange }: EditorProps) {
+  if (column.type === 'date') {
+    return <DateInput autoFocus value={typeof draft === 'string' ? draft : ''} onChange={onDraftChange} />
+  }
   if (column.type === 'number') {
     return (
       <input
@@ -58,6 +71,42 @@ export function CellEditor({ column, draft, onDraftChange }: EditorProps) {
       value={typeof draft === 'string' ? draft : ''}
       onChange={(event) => onDraftChange(event.target.value)}
     />
+  )
+}
+
+/** A `date` value: typed as YYYY-MM-DD, or picked with the native date
+ * picker (whose value is already YYYY-MM-DD). Both edit the same string. */
+export function DateInput({
+  value,
+  autoFocus = false,
+  disabled = false,
+  onChange,
+}: {
+  value: string
+  autoFocus?: boolean
+  disabled?: boolean
+  onChange: (value: string) => void
+}) {
+  return (
+    <span className="date-input">
+      <input
+        autoFocus={autoFocus}
+        type="text"
+        inputMode="numeric"
+        placeholder="YYYY-MM-DD"
+        disabled={disabled}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+      />
+      <input
+        type="date"
+        aria-label="Pick a date"
+        tabIndex={-1}
+        disabled={disabled}
+        value={isDate(value) ? value : ''}
+        onChange={(event) => onChange(event.target.value)}
+      />
+    </span>
   )
 }
 

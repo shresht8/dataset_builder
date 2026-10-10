@@ -2,6 +2,8 @@
 // credentials so the signed session cookie (GL-1-9) round-trips; the Vite dev
 // server proxies /v1 to the backend so this works same-origin in dev.
 import type {
+  ApiToken,
+  ApiTokenCreated,
   Dataset,
   ImportCommitResponse,
   ImportPreviewResponse,
@@ -62,6 +64,10 @@ export function listDatasets(): Promise<Dataset[]> {
   return apiFetch<Dataset[]>('/datasets')
 }
 
+export function getDataset(datasetId: string): Promise<Dataset> {
+  return apiFetch<Dataset>(`/datasets/${datasetId}`)
+}
+
 export function getSchema(datasetId: string): Promise<Schema> {
   return apiFetch<Schema>(`/datasets/${datasetId}/schema`)
 }
@@ -111,6 +117,20 @@ export function patchRow(
     headers: { 'If-Match': String(rev) },
     body: JSON.stringify(payload),
   })
+}
+
+// Soft delete (GL-3.5-18): editor+, optimistic locking as for PATCH (a 409
+// carries the row's current state).
+export function deleteRow(datasetId: string, rowId: string, rev: number): Promise<void> {
+  return apiFetch<void>(`/datasets/${datasetId}/rows/${rowId}`, {
+    method: 'DELETE',
+    headers: { 'If-Match': String(rev) },
+  })
+}
+
+// Only a dataset without versions can be deleted (409 otherwise).
+export function deleteDataset(datasetId: string): Promise<void> {
+  return apiFetch<void>(`/datasets/${datasetId}`, { method: 'DELETE' })
 }
 
 export function listComments(datasetId: string, rowId: string): Promise<RowComment[]> {
@@ -170,14 +190,18 @@ export function cutVersion(datasetId: string, payload: VersionCutPayload): Promi
 // Import preview (§4, GL-2-9): parses the upload only, persists nothing.
 // Without `mapping`, returns detected columns + a suggested auto-mapping and
 // a sample. With `mapping`, additionally returns the full validation report.
+// `recordsKey` picks the list of records in a JSON/YAML file (GL-3.5-5); when
+// one is needed, the 422's body carries `records_key_candidates`.
 export function previewImport(
   datasetId: string,
   file: File,
   mapping?: Record<string, string>,
+  recordsKey?: string,
 ): Promise<ImportPreviewResponse> {
   const form = new FormData()
   form.append('file', file)
   if (mapping) form.append('mapping', JSON.stringify(mapping))
+  if (recordsKey) form.append('records_key', recordsKey)
   return apiFetchForm<ImportPreviewResponse>(`/datasets/${datasetId}/import/preview`, form)
 }
 
@@ -189,11 +213,30 @@ export function commitImport(
   mapping: Record<string, string>,
   skip: number[],
   fixes: Record<number, Record<string, unknown>>,
+  recordsKey?: string,
 ): Promise<ImportCommitResponse> {
   const form = new FormData()
   form.append('file', file)
   form.append('mapping', JSON.stringify(mapping))
   if (skip.length > 0) form.append('skip', JSON.stringify(skip))
   if (Object.keys(fixes).length > 0) form.append('fixes', JSON.stringify(fixes))
+  if (recordsKey) form.append('records_key', recordsKey)
   return apiFetchForm<ImportCommitResponse>(`/datasets/${datasetId}/import`, form)
+}
+
+// Personal access tokens (GL-1-10, page GL-3.5-19). A token acts as the user
+// who created it; the raw value is only returned by createToken.
+export function listTokens(): Promise<ApiToken[]> {
+  return apiFetch<ApiToken[]>('/auth/tokens')
+}
+
+export function createToken(name: string, ttlDays: number): Promise<ApiTokenCreated> {
+  return apiFetch<ApiTokenCreated>('/auth/tokens', {
+    method: 'POST',
+    body: JSON.stringify({ name, ttl_days: ttlDays }),
+  })
+}
+
+export function revokeToken(tokenId: string): Promise<void> {
+  return apiFetch<void>(`/auth/tokens/${tokenId}`, { method: 'DELETE' })
 }

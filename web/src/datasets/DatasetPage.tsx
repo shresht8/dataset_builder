@@ -1,23 +1,33 @@
 // The typed annotation grid (design §4, GL-2-6): one row per case, columns
 // from the dataset schema, keyboard-first navigation and editing, a detail
-// drawer for long_text. Filters/saved views, row status/assignee, comments,
-// and the 409 conflict UI are the workflow layer added in GL-2-7.
+// drawer for long_text and json. Filters/saved views, row status/assignee,
+// comments, and the 409 conflict UI are the workflow layer added in GL-2-7.
+// Editing follows the role (GL-3.5-14): viewers get no edit affordances, and
+// an existing row's key value can only be changed by editors and admins.
+// Editors can delete rows (soft) and, while it has no versions, the dataset
+// itself (GL-3.5-18).
 import { createColumnHelper, flexRender, tableFeatures, useTable } from '@tanstack/react-table'
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams } from 'react-router-dom'
 import {
   ApiError,
   createRow,
+  deleteRow,
+  getDataset,
   getSchema,
+  listVersions,
   listRows,
   listUsers,
   patchRow,
   type RowPatchPayload,
 } from '../api/client'
-import type { Column, Row, User } from '../api/types'
+import type { Column, Role, Row, User } from '../api/types'
 import { useAuth } from '../auth/AuthContext'
 import { CellDisplay, CellEditor, MultiSelectEditor } from './Cell'
 import { CommentsPanel } from './CommentsPanel'
+import { ConfirmDialog } from './ConfirmDialog'
+import { DeleteDatasetDialog } from './DeleteDatasetDialog'
+import { DATE_HINT, isDate } from './dates'
 import { ConflictDialog } from './ConflictDialog'
 import { DetailDrawer } from './DetailDrawer'
 import { FilterBar } from './FilterBar'
@@ -58,8 +68,12 @@ const ALL_ROWS_VIEW = BUILTIN_VIEWS.find((v) => v.id === 'builtin:all')!
 const gridFeatures = tableFeatures({})
 const columnHelper = createColumnHelper<typeof gridFeatures, DisplayRow>()
 
-function isEmptyValue(value: unknown): boolean {
+const ROLE_RANK: Record<Role, number> = { viewer: 0, annotator: 1, editor: 2, admin: 3 }
+
+// Mirrors the backend's is_empty (validation.py): for json only null is empty.
+function isEmptyValue(column: Column, value: unknown): boolean {
   if (value === null || value === undefined) return true
+  if (column.type === 'json') return false
   if (typeof value === 'string' && value.trim() === '') return true
   if (Array.isArray(value) && value.length === 0) return true
   return false
@@ -68,11 +82,29 @@ function isEmptyValue(value: unknown): boolean {
 // Mirrors the backend's required check (rows.py:_validate_row_data) so the
 // pending new row is only POSTed once it would actually pass validation.
 function canCreate(columns: Column[], data: Record<string, unknown>): boolean {
-  return columns.every((col) => col.archived || !col.required || !isEmptyValue(data[col.key]))
+  return columns.every((col) => col.archived || !col.required || !isEmptyValue(col, data[col.key]))
 }
 
 function isMissingRequired(columns: Column[], data: Record<string, unknown>): boolean {
-  return columns.some((col) => !col.archived && col.required && isEmptyValue(data[col.key]))
+  return columns.some((col) => !col.archived && col.required && isEmptyValue(col, data[col.key]))
+}
+
+// A 409 from PATCH carries the row's current state (rev conflict); other 409s,
+// like a duplicate key value, carry only a `detail` message.
+function isRowBody(body: unknown): body is Row {
+  return typeof body === 'object' && body !== null && typeof (body as Row).rev === 'number'
+}
+
+const opensDrawer = (column: Column) => column.type === 'long_text' || column.type === 'json'
+
+function KeyIcon() {
+  return (
+    <svg className="key-icon" viewBox="0 0 16 16" width="12" height="12" aria-label="Key column" role="img">
+      <title>Key column: identifies each row</title>
+      <circle cx="5" cy="8" r="3" fill="none" stroke="currentColor" strokeWidth="1.6" />
+      <path d="M8 8h7M12 8v3M14.5 8v2" fill="none" stroke="currentColor" strokeWidth="1.6" />
+    </svg>
+  )
 }
 
 function initialDraft(column: Column, value: unknown): unknown {
@@ -86,7 +118,9 @@ export function DatasetPage() {
   const { datasetId } = useParams<{ datasetId: string }>()
   const { user } = useAuth()
   const isAdmin = user?.role === 'admin'
-  const canImport = user?.role === 'admin' || user?.role === 'editor'
+  const rank = ROLE_RANK[user?.role ?? 'viewer']
+  const canAnnotate = rank >= ROLE_RANK.annotator
+  const canImport = rank >= ROLE_RANK.editor
   const [columns, setColumns] = useState<Column[] | null>(null)
   const [rows, setRows] = useState<Row[] | null>(null)
   const [users, setUsers] = useState<User[] | null>(null)
@@ -100,12 +134,20 @@ export function DatasetPage() {
   const [drawerFocusKey, setDrawerFocusKey] = useState<string | undefined>(undefined)
   const [commentsRowId, setCommentsRowId] = useState<string | null>(null)
   const [conflict, setConflict] = useState<ConflictState | null>(null)
+  // Per-cell save errors shown inline, e.g. a duplicate key value (409).
+  const [cellErrors, setCellErrors] = useState<Record<string, string>>({})
   const [filters, setFilters] = useState<ViewFilters>(DEFAULT_VIEW.filters)
   const [missingRequired, setMissingRequired] = useState(Boolean(DEFAULT_VIEW.missingRequired))
   const [searchInput, setSearchInput] = useState(DEFAULT_VIEW.filters.q ?? '')
   const [customViews, setCustomViews] = useState<SavedView[]>([])
   const [importOpen, setImportOpen] = useState(false)
   const [versionsOpen, setVersionsOpen] = useState(false)
+  const navigate = useNavigate()
+  const [datasetName, setDatasetName] = useState<string | null>(null)
+  // Versions pin a dataset: only one with none can be deleted (GL-3.5-18).
+  const [versionCount, setVersionCount] = useState<number | null>(null)
+  const [deleteDatasetOpen, setDeleteDatasetOpen] = useState(false)
+  const [rowToDelete, setRowToDelete] = useState<Row | null>(null)
   const cellRefs = useRef(new Map<string, HTMLTableCellElement>())
 
   useEffect(() => {
@@ -126,6 +168,16 @@ export function DatasetPage() {
     if (!datasetId) return
     setCustomViews(loadCustomViews(datasetId))
   }, [datasetId])
+
+  useEffect(() => {
+    if (!datasetId || !canImport) return
+    getDataset(datasetId)
+      .then((dataset) => setDatasetName(dataset.name))
+      .catch(() => setDatasetName(null))
+    listVersions(datasetId)
+      .then((versions) => setVersionCount(versions.length))
+      .catch(() => setVersionCount(null))
+  }, [datasetId, canImport, versionsOpen])
 
   useEffect(() => {
     if (!isAdmin) {
@@ -149,10 +201,7 @@ export function DatasetPage() {
     () => (columns ?? []).filter((col) => !col.archived).sort((a, b) => a.order - b.order),
     [columns],
   )
-  const longTextColumns = useMemo(
-    () => orderedColumns.filter((col) => col.type === 'long_text'),
-    [orderedColumns],
-  )
+  const drawerColumns = useMemo(() => orderedColumns.filter(opensDrawer), [orderedColumns])
   const columnsByKey = useMemo(
     () => new Map(orderedColumns.map((col) => [col.key, col])),
     [orderedColumns],
@@ -182,7 +231,12 @@ export function DatasetPage() {
       })
       .catch((err) => {
         if (cancelled) return
-        setNotice(err instanceof ApiError ? err.message : 'Could not create row')
+        const keyColumn = orderedColumns.find((col) => col.is_key)
+        if (err instanceof ApiError && err.status === 409 && keyColumn) {
+          setCellError({ rowId: NEW_ROW_ID, colKey: keyColumn.key }, err.message)
+        } else {
+          setNotice(err instanceof ApiError ? err.message : 'Could not create row')
+        }
       })
     return () => {
       cancelled = true
@@ -222,36 +276,83 @@ export function DatasetPage() {
       .catch((err) => setNotice(err instanceof ApiError ? err.message : 'Failed to refresh rows'))
   }
 
+  function setCellError(coord: CellCoord, message: string | null) {
+    const cacheKey = `${coord.rowId}:${coord.colKey}`
+    setCellErrors((prev) => {
+      if (message === null) {
+        if (!(cacheKey in prev)) return prev
+        const next = { ...prev }
+        delete next[cacheKey]
+        return next
+      }
+      return { ...prev, [cacheKey]: message }
+    })
+  }
+
   // Optimistic-locking PATCH (§4): on 409 the conflicting current row is
   // surfaced via the conflict dialog instead of being silently applied.
-  async function applyRowPatch(rowId: string, payload: RowPatchPayload, revOverride?: number) {
-    if (!datasetId) return
+  // Resolves to an error message for any other failure (null on success).
+  async function applyRowPatch(rowId: string, payload: RowPatchPayload, revOverride?: number): Promise<string | null> {
+    if (!datasetId) return null
     const rev = revOverride ?? (rows ?? []).find((r) => r.id === rowId)?.rev
-    if (rev === undefined) return
+    if (rev === undefined) return null
     try {
       const updated = await patchRow(datasetId, rowId, rev, payload)
       setRows((prev) => (prev ?? []).map((r) => (r.id === rowId ? updated : r)))
       setConflict(null)
-      setNotice(null)
+      return null
     } catch (err) {
-      if (err instanceof ApiError && err.status === 409 && err.body) {
-        setConflict({ rowId, payload, theirs: err.body as Row })
-      } else {
-        setNotice(err instanceof ApiError ? err.message : 'Save failed')
+      if (err instanceof ApiError && err.status === 409 && isRowBody(err.body)) {
+        setConflict({ rowId, payload, theirs: err.body })
+        return null
       }
+      return err instanceof ApiError ? err.message : 'Save failed'
     }
   }
 
-  function saveField(rowId: string, colKey: string, value: unknown) {
-    void applyRowPatch(rowId, { data: { [colKey]: value } })
+  async function patchOrNotify(rowId: string, payload: RowPatchPayload, revOverride?: number) {
+    setNotice(await applyRowPatch(rowId, payload, revOverride))
+  }
+
+  async function saveField(rowId: string, colKey: string, value: unknown) {
+    const error = await applyRowPatch(rowId, { data: { [colKey]: value } })
+    // A duplicate key value is shown on the cell itself; anything else as a notice.
+    const isKeyClash = error !== null && Boolean(columnsByKey.get(colKey)?.is_key)
+    // The API names the other row's id; in a narrow cell the key alone reads better.
+    setCellError({ rowId, colKey }, isKeyClash ? error.replace(/ \(row [0-9a-f-]+\)$/, '') : null)
+    setNotice(isKeyClash ? null : error)
+  }
+
+  function saveFromDrawer(rowId: string, colKey: string, value: unknown): Promise<string | null> {
+    if (rowId === NEW_ROW_ID) {
+      setPendingData((prev) => ({ ...(prev ?? {}), [colKey]: value }))
+      return Promise.resolve(null)
+    }
+    return applyRowPatch(rowId, { data: { [colKey]: value } })
+  }
+
+  async function confirmDeleteRow(row: Row): Promise<string | null> {
+    if (!datasetId) return null
+    try {
+      await deleteRow(datasetId, row.id, row.rev)
+      setRows((prev) => (prev ?? []).filter((r) => r.id !== row.id))
+      return null
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 409 && isRowBody(err.body)) {
+        const theirs = err.body
+        setRows((prev) => (prev ?? []).map((r) => (r.id === row.id ? theirs : r)))
+        return 'This row changed since you loaded it; review the latest version first.'
+      }
+      return err instanceof ApiError ? err.message : 'Delete failed'
+    }
   }
 
   function handleStatusChange(rowId: string, status: string) {
-    void applyRowPatch(rowId, { status: status as Row['status'] })
+    void patchOrNotify(rowId, { status: status as Row['status'] })
   }
 
   function handleAssigneeChange(rowId: string, assignee: string | null) {
-    void applyRowPatch(rowId, { assignee })
+    void patchOrNotify(rowId, { assignee })
   }
 
   function handleTakeTheirs() {
@@ -262,28 +363,45 @@ export function DatasetPage() {
 
   function handleRetryMine() {
     if (!conflict) return
-    void applyRowPatch(conflict.rowId, conflict.payload, conflict.theirs.rev)
+    void patchOrNotify(conflict.rowId, conflict.payload, conflict.theirs.rev)
   }
 
   function saveCell(coord: CellCoord, value: unknown) {
     if (coord.rowId === NEW_ROW_ID) {
+      setCellError(coord, null)
       setPendingData((prev) => ({ ...(prev ?? {}), [coord.colKey]: value }))
       return
     }
-    saveField(coord.rowId, coord.colKey, value)
+    void saveField(coord.rowId, coord.colKey, value)
+  }
+
+  // Viewers edit nothing, and an existing row's key value needs editor+. The
+  // API enforces both; this just doesn't offer an edit that would be refused.
+  function canEditCell(coord: CellCoord, column: Column): boolean {
+    if (!canAnnotate) return false
+    return !(column.is_key && coord.rowId !== NEW_ROW_ID && !canImport)
   }
 
   function startEdit(coord: CellCoord) {
     const column = orderedColumns.find((col) => col.key === coord.colKey)
-    if (!column) return
+    if (!column || !canEditCell(coord, column)) return
     setDraft(initialDraft(column, getCellValue(coord)))
     setEditingCell(coord)
   }
 
-  function commitEdit() {
-    if (!editingCell) return
-    saveCell(editingCell, draft)
+  // Returns false when the draft is refused (an invalid date stays in edit
+  // mode with an inline error instead of being saved).
+  function commitEdit(): boolean {
+    if (!editingCell) return false
+    const column = columnsByKey.get(editingCell.colKey)
+    if (column?.type === 'date' && typeof draft === 'string' && draft.trim() !== '' && !isDate(draft.trim())) {
+      setCellError(editingCell, DATE_HINT)
+      return false
+    }
+    setCellError(editingCell, null)
+    saveCell(editingCell, column?.type === 'date' && typeof draft === 'string' ? draft.trim() : draft)
     setEditingCell(null)
+    return true
   }
 
   function toggleBoolean(coord: CellCoord) {
@@ -376,11 +494,11 @@ export function DatasetPage() {
         commitEdit()
       } else if (event.key === 'Escape') {
         event.preventDefault()
+        setCellError(editingCell, null)
         setEditingCell(null)
       } else if (event.key === 'Tab') {
         event.preventDefault()
-        commitEdit()
-        moveActive(0, event.shiftKey ? -1 : 1)
+        if (commitEdit()) moveActive(0, event.shiftKey ? -1 : 1)
       }
       return
     }
@@ -408,14 +526,15 @@ export function DatasetPage() {
         break
       case 'Enter':
         event.preventDefault()
-        if (column.type === 'long_text') openDrawer(activeCell.rowId, activeCell.colKey)
-        else if (column.type === 'boolean') toggleBoolean(activeCell)
-        else startEdit(activeCell)
+        if (opensDrawer(column)) openDrawer(activeCell.rowId, activeCell.colKey)
+        else if (column.type === 'boolean') {
+          if (canEditCell(activeCell, column)) toggleBoolean(activeCell)
+        } else startEdit(activeCell)
         break
       case ' ':
         if (column.type === 'boolean') {
           event.preventDefault()
-          toggleBoolean(activeCell)
+          if (canEditCell(activeCell, column)) toggleBoolean(activeCell)
         }
         break
       default:
@@ -429,7 +548,12 @@ export function DatasetPage() {
   const tableColumns = orderedColumns.map((column) =>
     columnHelper.display({
       id: column.key,
-      header: column.label + (column.required ? ' *' : ''),
+      header: () => (
+        <>
+          {column.is_key && <KeyIcon />}
+          {column.label + (column.required ? ' *' : '')}
+        </>
+      ),
       cell: (ctx): ReactNode => {
         const row = ctx.row.original
         const isEditing = editingCell?.rowId === row.id && editingCell.colKey === column.key
@@ -478,6 +602,17 @@ export function DatasetPage() {
         <button type="button" onClick={() => setVersionsOpen(true)}>
           Versions
         </button>
+        {canImport && datasetName && (
+          <button
+            type="button"
+            className="danger"
+            disabled={versionCount !== 0}
+            title={versionCount === 0 ? undefined : 'A dataset with versions cannot be deleted'}
+            onClick={() => setDeleteDatasetOpen(true)}
+          >
+            Delete dataset
+          </button>
+        )}
       </div>
       <FilterBar
         filters={filters}
@@ -532,6 +667,7 @@ export function DatasetPage() {
                   if (!column) return null
                   const coord: CellCoord = { rowId: row.original.id, colKey: column.key }
                   const isActive = activeCell?.rowId === coord.rowId && activeCell.colKey === coord.colKey
+                  const cellError = cellErrors[`${coord.rowId}:${coord.colKey}`]
                   return (
                     <td
                       key={cell.id}
@@ -544,24 +680,34 @@ export function DatasetPage() {
                       className={`grid-cell${isActive ? ' active' : ''}`}
                       onFocus={() => handleCellFocus(coord)}
                       onDoubleClick={() => {
-                        if (column.type === 'long_text') openDrawer(coord.rowId, coord.colKey)
+                        if (opensDrawer(column)) openDrawer(coord.rowId, coord.colKey)
                         else if (column.type !== 'boolean') startEdit(coord)
                       }}
                     >
                       {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                      {cellError && (
+                        <div className="cell-error" role="alert">
+                          {cellError}
+                        </div>
+                      )}
                     </td>
                   )
                 })}
                 {fullRow && (
                   <>
                     <td className="grid-cell workflow-cell" onKeyDown={(event) => event.stopPropagation()}>
-                      <StatusControl row={fullRow} onChange={(status) => handleStatusChange(fullRow.id, status)} />
+                      <StatusControl
+                        row={fullRow}
+                        readOnly={!canAnnotate}
+                        onChange={(status) => handleStatusChange(fullRow.id, status)}
+                      />
                     </td>
                     <td className="grid-cell workflow-cell" onKeyDown={(event) => event.stopPropagation()}>
                       <AssigneeControl
                         row={fullRow}
                         currentUserId={user?.id ?? ''}
                         users={isAdmin ? users : null}
+                        readOnly={!canAnnotate}
                         onChange={(assignee) => handleAssigneeChange(fullRow.id, assignee)}
                       />
                     </td>
@@ -569,6 +715,16 @@ export function DatasetPage() {
                       <button type="button" onClick={() => setCommentsRowId(fullRow.id)}>
                         Comments
                       </button>
+                      {canImport && (
+                        <button
+                          type="button"
+                          className="danger-link"
+                          aria-label="Delete row"
+                          onClick={() => setRowToDelete(fullRow)}
+                        >
+                          Delete
+                        </button>
+                      )}
                     </td>
                   </>
                 )}
@@ -577,15 +733,18 @@ export function DatasetPage() {
           })}
         </tbody>
       </table>
-      <button type="button" disabled={pendingData !== null} onClick={handleAddRow}>
-        + Add row
-      </button>
+      {canAnnotate && (
+        <button type="button" disabled={pendingData !== null} onClick={handleAddRow}>
+          + Add row
+        </button>
+      )}
       {drawerRow && (
         <DetailDrawer
-          columns={longTextColumns}
+          columns={drawerColumns}
           data={drawerRow.data}
           focusColKey={drawerFocusKey}
-          onFieldSave={(colKey, value) => saveCell({ rowId: drawerRow.id, colKey }, value)}
+          readOnly={!canAnnotate}
+          onFieldSave={(colKey, value) => saveFromDrawer(drawerRow.id, colKey, value)}
           onClose={closeDrawer}
         />
       )}
@@ -613,6 +772,27 @@ export function DatasetPage() {
           columns={orderedColumns}
           onClose={() => setImportOpen(false)}
           onImported={reloadRows}
+        />
+      )}
+      {rowToDelete && (
+        <ConfirmDialog
+          title="Delete this row?"
+          confirmLabel="Delete row"
+          onConfirm={() => confirmDeleteRow(rowToDelete)}
+          onClose={() => setRowToDelete(null)}
+        >
+          <p>
+            It disappears from the grid, future versions, sync and pull. Its data and history are kept, and a key
+            it used becomes free again.
+          </p>
+        </ConfirmDialog>
+      )}
+      {deleteDatasetOpen && datasetId && datasetName && (
+        <DeleteDatasetDialog
+          datasetId={datasetId}
+          name={datasetName}
+          onDeleted={() => navigate('/')}
+          onClose={() => setDeleteDatasetOpen(false)}
         />
       )}
       {versionsOpen && datasetId && (

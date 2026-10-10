@@ -51,6 +51,11 @@ def get_current_user(
     return user
 
 
+def has_role(user: User, minimum: Role) -> bool:
+    """Whether `user` holds at least `minimum` (§5 rank order)."""
+    return _ROLE_RANK[user.role] >= _ROLE_RANK[minimum]
+
+
 def require_role(minimum: Role) -> Callable[..., User]:
     """Dependency factory: caller must hold at least `minimum` role (§5)."""
 
