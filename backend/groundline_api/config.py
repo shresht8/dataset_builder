@@ -32,6 +32,9 @@ class Settings(BaseSettings):
     # GL-3.5-13: serialised size cap for one `json` cell (large blobs make the
     # grid unusable).
     json_cell_max_bytes: int = 256 * 1024
+    # GL-3.5-5: import upload cap (all formats) and the YAML alias-expansion cap.
+    import_max_bytes: int = 50 * 1024 * 1024
+    import_max_nodes: int = 1_000_000
     # Signs session cookies (GL-1-9). The default is for local dev only.
     app_secret_key: str = "change-me"
 

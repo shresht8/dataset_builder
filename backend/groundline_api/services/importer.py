@@ -1,4 +1,4 @@
-"""CSV / XLSX import: parsing, column mapping, and validation (§4, §8, GL-2-8).
+"""CSV / XLSX / JSON / JSONL / YAML import: parsing, mapping, validation (§4, §8).
 
 Two-step flow used by `api/v1/imports.py`:
   - `preview()` -- a single pass over the file that returns a sample of the
@@ -9,14 +9,16 @@ Two-step flow used by `api/v1/imports.py`:
     was explicitly skipped, or errored. The route creates a `DatasetRow` for
     each row `commit()` returns as valid.
 
-Neither pass materialises the whole file: `parse_upload` returns a row
-iterator (the CSV reader / openpyxl `iter_rows` generator), consumed once.
+CSV/XLSX are streamed (the CSV reader / openpyxl `iter_rows` generator,
+consumed once). JSON/JSONL/YAML are parsed whole by the shared
+`groundline_schema.records` (GL-3.5-5), and each record is flattened to dotted
+source columns, with the dataset's `json` column keys kept as leaves.
 
-Row index convention: 1-based, counting only rows of data. The header row
-itself is not numbered (the first row of data is row 1).
+Row index convention: 1-based, counting only rows of data (the header row of
+a CSV/XLSX is not numbered; for JSON/JSONL/YAML it's the record's position).
 
 Coercion from spreadsheet strings, applied per mapped column before
-validation:
+validation (GL-2-8):
   - number:        "4" / "4.5" -> int / float; anything else that doesn't
                     parse is left as the raw string, so validation reports
                     "expected a number".
@@ -26,8 +28,19 @@ validation:
                     parts dropped.
   - select:         trimmed string (still option-checked downstream).
   - text/long_text: the raw string, unmodified.
+  - json:           the raw string, as a JSON string.
 An empty cell is treated as an absent value (the column's `required` check
 applies to it; it is never coerced).
+
+Typed values from JSON/YAML (GL-3.5-5): strings -- and plain YAML scalars,
+by their raw text -- take the string rules above, except that a plain YAML
+scalar going to a `json` column is typed the way JSON would type it. Numbers
+and booleans are kept where the column type allows (number -> text is its
+string; 0/1 -> boolean; booleans -> "true"/"false" text); arrays fit only
+multi_select or json, objects only json. null means absent.
+
+If the dataset has a key column, a key repeated within the file or already
+used in the dataset is a row error; import never updates rows (that's sync).
 """
 
 from __future__ import annotations
@@ -35,15 +48,28 @@ from __future__ import annotations
 import csv
 import io
 import re
+import zipfile
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import openpyxl
 from groundline_schema import ColumnType
+from groundline_schema.paths import PathError, flatten
+from groundline_schema.records import (
+    STRUCTURED_SUFFIXES,
+    PlainScalar,
+    RecordProblem,
+    RecordsError,
+    decode_text,
+    parse_records,
+    to_json_value,
+)
+from openpyxl.utils.exceptions import InvalidFileException
 
+from groundline_api.config import settings
 from groundline_api.models.dataset import DatasetColumn
-from groundline_api.services.validation import row_errors
+from groundline_api.services.validation import key_column, row_errors
 
 SAMPLE_SIZE = 20
 
@@ -51,61 +77,125 @@ SAMPLE_SIZE = 20
 class ImportRequestError(Exception):
     """A caller-facing (422) error in the uploaded file or the supplied mapping."""
 
+    def __init__(self, message: str, candidates: list[str] | None = None) -> None:
+        super().__init__(message)
+        self.candidates = candidates  # records_key choices, when one is needed
+
+
+class _CoercionError(Exception):
+    """A value that can't go into its mapped column at all (a row error)."""
+
 
 @dataclass
 class ParsedSource:
     header: list[str]
-    rows: Iterator[list[str]]  # raw cell strings, one list per data row
+    # Per data row: {source column: value}, or a RecordProblem for a record
+    # that couldn't be read. CSV/XLSX values are raw cell strings.
+    rows: Iterator[dict[str, Any] | RecordProblem]
+    structured: bool = False
+    records_key: str | None = None
+    ignored_keys: list[str] = field(default_factory=list)
 
 
-def parse_upload(filename: str, content: bytes) -> ParsedSource:
-    """Parse a CSV or XLSX upload into a header row and a row iterator."""
+def parse_upload(
+    filename: str,
+    content: bytes,
+    columns: list[DatasetColumn] | None = None,
+    records_key: str | None = None,
+) -> ParsedSource:
+    """Parse an upload into source columns and a row iterator."""
     lower = filename.lower()
     if lower.endswith(".csv"):
         return _parse_csv(content)
     if lower.endswith(".xlsx"):
         return _parse_xlsx(content)
-    raise ImportRequestError(f"unsupported file type: {filename!r} (expected .csv or .xlsx)")
+    if lower.endswith(STRUCTURED_SUFFIXES):
+        return _parse_structured(filename, content, columns or [], records_key)
+    raise ImportRequestError(
+        f"unsupported file type: {filename!r} "
+        "(expected .csv, .xlsx, .json, .jsonl, .ndjson, .yaml or .yml)"
+    )
 
 
 def _parse_csv(content: bytes) -> ParsedSource:
-    text = content.decode("utf-8-sig")
+    try:
+        text = decode_text(content, csv=True)
+    except RecordsError as exc:
+        raise ImportRequestError(str(exc)) from None
     reader = csv.reader(io.StringIO(text))
     try:
         header = next(reader)
     except StopIteration:
         header = []
 
-    def rows() -> Iterator[list[str]]:
-        yield from reader
+    def rows() -> Iterator[dict[str, Any]]:
+        for raw_row in reader:
+            yield _cells(header, raw_row)
 
     return ParsedSource(header=header, rows=rows())
 
 
 def _parse_xlsx(content: bytes) -> ParsedSource:
-    workbook = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
-    sheet = workbook.worksheets[0]
-    row_iter = sheet.iter_rows(values_only=True)
     try:
-        header = ["" if cell is None else str(cell) for cell in next(row_iter)]
-    except StopIteration:
-        header = []
+        workbook = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
+        row_iter = workbook.worksheets[0].iter_rows(values_only=True)
+        first = next(row_iter, None)
+    except (zipfile.BadZipFile, InvalidFileException, KeyError, OSError, ValueError, IndexError):
+        raise ImportRequestError(
+            "could not read the workbook — is it a valid, unencrypted .xlsx file?"
+        ) from None
+    header = [] if first is None else ["" if cell is None else str(cell) for cell in first]
 
-    def rows() -> Iterator[list[str]]:
+    def rows() -> Iterator[dict[str, Any]]:
         for raw_row in row_iter:
-            yield ["" if cell is None else str(cell) for cell in raw_row]
+            yield _cells(header, ["" if cell is None else str(cell) for cell in raw_row])
 
     return ParsedSource(header=header, rows=rows())
 
 
-def _iterate_rows(source: ParsedSource) -> Iterator[tuple[int, dict[str, str]]]:
-    """Yield (1-based row index, {source_column: raw_value}) for each data row."""
-    header = source.header
-    for index, raw_row in enumerate(source.rows, start=1):
-        values = {
-            header[i]: (raw_row[i] if i < len(raw_row) else "") for i in range(len(header))
-        }
-        yield index, values
+def _cells(header: list[str], raw_row: list[str]) -> dict[str, str]:
+    return {header[i]: (raw_row[i] if i < len(raw_row) else "") for i in range(len(header))}
+
+
+def _parse_structured(
+    filename: str, content: bytes, columns: list[DatasetColumn], records_key: str | None
+) -> ParsedSource:
+    try:
+        parsed = parse_records(filename, content, records_key, settings.import_max_nodes)
+    except RecordsError as exc:
+        raise ImportRequestError(str(exc), exc.candidates) from None
+
+    leaves = {col.key for col in columns if col.type == ColumnType.JSON}
+    header: list[str] = []
+    seen: set[str] = set()
+    rows: list[dict[str, Any] | RecordProblem] = []
+    for record in parsed.records:
+        if isinstance(record, RecordProblem):
+            rows.append(record)
+            continue
+        try:
+            flat = flatten(record, leaves)
+        except PathError as exc:
+            rows.append(RecordProblem(str(exc)))
+            continue
+        for path in flat:
+            if path not in seen:
+                seen.add(path)
+                header.append(path)
+        rows.append(flat)
+
+    return ParsedSource(
+        header=header,
+        rows=iter(rows),
+        structured=True,
+        records_key=parsed.records_key,
+        ignored_keys=parsed.ignored_keys,
+    )
+
+
+def _iterate_rows(source: ParsedSource) -> Iterator[tuple[int, dict[str, Any] | RecordProblem]]:
+    """Yield (1-based row index, row values or a RecordProblem) for each data row."""
+    yield from enumerate(source.rows, start=1)
 
 
 def suggest_mapping(header: list[str], columns: list[DatasetColumn]) -> dict[str, str]:
@@ -156,28 +246,123 @@ def _coerce(raw: str, col_type: ColumnType) -> Any:
         if lowered in ("false", "0", "no"):
             return False
         return raw
-    return raw  # text / long_text: as-is
+    return raw  # text / long_text / json: as-is
+
+
+def _coerce_typed(value: Any, col_type: ColumnType) -> Any:
+    """Coerce one JSON/YAML value for its column (see the module docstring)."""
+    if col_type == ColumnType.JSON:
+        try:
+            return to_json_value(value)
+        except ValueError as exc:
+            raise _CoercionError(str(exc)) from None
+    if isinstance(value, str):  # including plain YAML scalars, by their raw text
+        return _coerce(str(value), col_type)
+    if isinstance(value, bool):
+        if col_type in (ColumnType.TEXT, ColumnType.LONG_TEXT, ColumnType.SELECT):
+            return "true" if value else "false"
+        return value
+    if isinstance(value, (int, float)):
+        if col_type in (ColumnType.TEXT, ColumnType.LONG_TEXT, ColumnType.SELECT):
+            return str(value)
+        if col_type == ColumnType.BOOLEAN and value in (0, 1):
+            return bool(value)
+        return value
+    if isinstance(value, list) and col_type == ColumnType.MULTI_SELECT:
+        return [str(item) if isinstance(item, PlainScalar) else item for item in value]
+    raise _CoercionError("map this to a json column")
 
 
 def _map_row(
-    raw_values: dict[str, str],
+    raw_values: dict[str, Any],
     mapping: dict[str, str],
     columns_by_key: dict[str, DatasetColumn],
-) -> dict[str, Any]:
-    """Apply the mapping + type coercion to one source row's raw string cells."""
+    structured: bool,
+) -> tuple[dict[str, Any], list[tuple[str, str]]]:
+    """Apply the mapping + type coercion to one source row.
+
+    Returns (data, coercion failures as (column_key, reason)).
+    """
     data: dict[str, Any] = {}
+    failures: list[tuple[str, str]] = []
     for source_col, schema_key in mapping.items():
         raw = raw_values.get(source_col)
-        if raw is None or raw.strip() == "":
-            continue  # empty cell = absent
-        data[schema_key] = _coerce(raw, columns_by_key[schema_key].type)
-    return data
+        col_type = columns_by_key[schema_key].type
+        if not structured:
+            if raw is None or raw.strip() == "":
+                continue  # empty cell = absent
+            data[schema_key] = _coerce(raw, col_type)
+            continue
+        if raw is None:
+            continue  # null / missing = absent
+        try:
+            data[schema_key] = _coerce_typed(raw, col_type)
+        except _CoercionError as exc:
+            failures.append((schema_key, str(exc)))
+    return data, failures
+
+
+def _sample_values(values: dict[str, Any] | RecordProblem) -> dict[str, Any]:
+    """A row's source values for the preview sample, typed as JSON would show them."""
+    if isinstance(values, RecordProblem):
+        return {}
+    shown: dict[str, Any] = {}
+    for column, value in values.items():
+        try:
+            shown[column] = to_json_value(value)
+        except ValueError:
+            shown[column] = str(value)
+    return shown
+
+
+@dataclass
+class _KeyCheck:
+    """Key column rules for one pass: unique within the file, new to the dataset."""
+
+    column: DatasetColumn | None
+    existing: set[str]
+    first_row: dict[str, int] = field(default_factory=dict)
+
+    def failures(self, index: int, data: dict[str, Any]) -> list[tuple[str, str]]:
+        if self.column is None:
+            return []
+        value = data.get(self.column.key)
+        if not isinstance(value, str) or value.strip() == "":
+            return []  # row_errors already reports a missing/invalid key
+        key = self.column.key
+        if value in self.first_row:
+            return [(key, f"duplicate key '{value}' in file (also row {self.first_row[value]})")]
+        self.first_row[value] = index
+        if value in self.existing:
+            return [(key, f"key '{value}' already exists — use rows push to update")]
+        return []
+
+
+def _validate_row(
+    index: int,
+    values: dict[str, Any] | RecordProblem,
+    mapping: dict[str, str],
+    columns: list[DatasetColumn],
+    columns_by_key: dict[str, DatasetColumn],
+    structured: bool,
+    fixes: dict[str, Any],
+    keys: _KeyCheck,
+) -> tuple[dict[str, Any], list[tuple[str, str]]]:
+    if isinstance(values, RecordProblem):
+        return {}, [("", values.reason)]
+    data, failures = _map_row(values, mapping, columns_by_key, structured)
+    data.update(fixes)
+    failed = {column for column, _ in failures}
+    failures += [(k, reason) for k, reason in row_errors(data, columns) if k not in failed]
+    failures += keys.failures(index, data)
+    return data, failures
 
 
 def preview(
     source: ParsedSource,
     columns: list[DatasetColumn],
     mapping: dict[str, str] | None,
+    existing_keys: set[str] | None = None,
 ) -> tuple[list[dict[str, Any]], int, dict[str, Any] | None]:
     """Single pass: sample rows, total count, and an optional validation report.
 
@@ -186,22 +371,23 @@ def preview(
     is `None` if no mapping was supplied, else `{"valid": n, "errors": [...]}`.
     """
     columns_by_key = {col.key: col for col in columns}
+    keys = _KeyCheck(key_column(columns), existing_keys or set())
     sample: list[dict[str, Any]] = []
     total = 0
     valid = 0
     errors: list[dict[str, Any]] = []
 
-    for index, raw_values in _iterate_rows(source):
+    for index, values in _iterate_rows(source):
         total += 1
         if len(sample) < SAMPLE_SIZE:
-            sample.append({"row": index, "values": raw_values})
+            sample.append({"row": index, "values": _sample_values(values)})
         if mapping is not None:
-            data = _map_row(raw_values, mapping, columns_by_key)
-            failures = row_errors(data, columns)
+            _, failures = _validate_row(
+                index, values, mapping, columns, columns_by_key, source.structured, {}, keys
+            )
             if failures:
                 errors.extend(
-                    {"row": index, "column": key, "reason": reason}
-                    for key, reason in failures
+                    {"row": index, "column": key, "reason": reason} for key, reason in failures
                 )
             else:
                 valid += 1
@@ -216,6 +402,7 @@ def commit(
     mapping: dict[str, str],
     skip: set[int],
     fixes: dict[int, dict[str, Any]],
+    existing_keys: set[str] | None = None,
 ) -> tuple[list[dict[str, Any]], int, int, list[dict[str, Any]]]:
     """Single pass: apply mapping + skip/fixes, validate, and report the outcome.
 
@@ -224,18 +411,26 @@ def commit(
     count, or the errors list (never silently dropped).
     """
     columns_by_key = {col.key: col for col in columns}
+    keys = _KeyCheck(key_column(columns), existing_keys or set())
     created: list[dict[str, Any]] = []
     imported = 0
     skipped = 0
     errors: list[dict[str, Any]] = []
 
-    for index, raw_values in _iterate_rows(source):
+    for index, values in _iterate_rows(source):
         if index in skip:
             skipped += 1
             continue
-        data = _map_row(raw_values, mapping, columns_by_key)
-        data.update(fixes.get(index, {}))
-        failures = row_errors(data, columns)
+        data, failures = _validate_row(
+            index,
+            values,
+            mapping,
+            columns,
+            columns_by_key,
+            source.structured,
+            fixes.get(index, {}),
+            keys,
+        )
         if failures:
             errors.extend(
                 {"row": index, "column": key, "reason": reason} for key, reason in failures
