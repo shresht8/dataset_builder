@@ -1,7 +1,8 @@
 """`datasets` and `dataset_columns` tables (§3).
 
     datasets         id, project_id, name, description, feature_id?, created_by
-    dataset_columns  dataset_id, key, label, type, options, required, order, archived
+    dataset_columns  dataset_id, key, label, type, options, required, order, archived,
+                     json_schema?, is_key
 """
 
 from __future__ import annotations
@@ -16,7 +17,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from groundline_api.db import Base
 from groundline_schema import ColumnType
 
-# Native Postgres enum over the six §3 column types ('text', 'long_text', ...).
+# Native Postgres enum over the §3 column types ('text', 'long_text', ...).
 column_type_enum = sa.Enum(
     ColumnType,
     name="column_type",
@@ -51,6 +52,15 @@ class Dataset(Base):
 
 class DatasetColumn(Base):
     __tablename__ = "dataset_columns"
+    __table_args__ = (
+        # At most one active key column per dataset (GL-3.5-12).
+        sa.Index(
+            "uq_dataset_columns_one_key",
+            "dataset_id",
+            unique=True,
+            postgresql_where=sa.text("is_key AND NOT archived"),
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, server_default=sa.text("gen_random_uuid()")
@@ -71,5 +81,11 @@ class DatasetColumn(Base):
     )
     order: Mapped[int] = mapped_column(sa.Integer(), nullable=False, server_default=sa.text("0"))
     archived: Mapped[bool] = mapped_column(
+        sa.Boolean(), nullable=False, server_default=sa.false()
+    )
+    # Optional JSON Schema constraining a `json` column's values; null otherwise.
+    json_schema: Mapped[dict | None] = mapped_column(JSONB(), nullable=True)
+    # The text column whose value identifies a row (CLI sync matches on it).
+    is_key: Mapped[bool] = mapped_column(
         sa.Boolean(), nullable=False, server_default=sa.false()
     )

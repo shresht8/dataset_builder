@@ -50,6 +50,8 @@ def _to_wire(col: DatasetColumn) -> Column:
         required=col.required,
         order=col.order,
         archived=col.archived,
+        json_schema=col.json_schema,
+        is_key=col.is_key,
     )
 
 
@@ -116,6 +118,7 @@ def put_schema(
 
     for position, col in enumerate(payload.columns):
         options = col.options if col.type in _OPTION_TYPES else None
+        json_schema = col.json_schema if col.type == ColumnType.JSON else None
         current = existing.get(col.key)
         if current is None:
             db.add(
@@ -128,6 +131,8 @@ def put_schema(
                     required=col.required,
                     order=position,
                     archived=False,
+                    json_schema=json_schema,
+                    is_key=col.is_key,
                 )
             )
         else:
@@ -137,10 +142,13 @@ def put_schema(
             current.required = col.required
             current.order = position
             current.archived = False
+            current.json_schema = json_schema
+            current.is_key = col.is_key
 
     for key, current in existing.items():
         if key not in payload_keys:
             current.archived = True
+            current.is_key = False
 
     db.commit()
     active = [c for c in _columns_of(db, dataset_id) if not c.archived]
