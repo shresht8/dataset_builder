@@ -8,6 +8,7 @@ shipped next to the data.
 from __future__ import annotations
 
 from groundline_schema.column_types import Column, ColumnType
+from groundline_schema.temporal import DATE_PATTERN
 
 # `services/validation.py::is_empty` treats None, "" (after strip) and [] as
 # "empty" for every column type except `json` (where only null is empty),
@@ -33,6 +34,10 @@ def _type_schema(column: Column) -> dict:
     """The JSON Schema fragment for a properly-typed, non-empty value."""
     if column.type == ColumnType.JSON:
         return _json_fragment(column)
+    if column.type == ColumnType.DATE:
+        # `format` is annotation-only by default in 2020-12, so the pattern is
+        # what actually makes validators check the shape (GL-3.5-8).
+        return {"type": "string", "format": "date", "pattern": DATE_PATTERN}
     if column.type in (ColumnType.TEXT, ColumnType.LONG_TEXT):
         return {"type": "string"}
     if column.type == ColumnType.NUMBER:

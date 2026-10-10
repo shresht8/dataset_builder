@@ -17,6 +17,7 @@ from typing import Any
 
 from fastapi import HTTPException
 from groundline_schema import ColumnType
+from groundline_schema.temporal import is_date
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import best_match
 from referencing.exceptions import Unresolvable
@@ -94,6 +95,8 @@ def type_error(col: DatasetColumn, value: Any) -> str | None:
             return f"{bad} not in {col.options}"
     elif col.type == ColumnType.JSON:
         return _json_error(col, value)
+    elif col.type == ColumnType.DATE and not is_date(value):
+        return f"expected a date as YYYY-MM-DD, got {value!r}"
     if col.is_key and isinstance(value, str) and value != value.strip():
         return "key value must not have leading or trailing whitespace"
     return None
