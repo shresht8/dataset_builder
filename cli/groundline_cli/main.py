@@ -4,6 +4,12 @@
     groundline pull claims-eligibility@v3 --format yaml --shape nested -o ./evals/
     groundline pull --lock
     groundline datasets diff claims-eligibility v3 v4
+
+    groundline schema infer questions.yaml --key id -o questions.schema.yaml
+    groundline datasets create questions --schema questions.schema.yaml
+    groundline rows push questions questions.yaml
+    groundline rows pull questions -o questions.yaml --records-key questions
+    groundline schema pull questions / schema push questions questions.schema.yaml
 """
 
 from __future__ import annotations
@@ -15,6 +21,8 @@ from groundline_schema.render import FORMATS, SHAPES
 
 from groundline_cli.client import ApiClient, ApiError
 from groundline_cli.commands import datasets as datasets_cmd
+from groundline_cli.commands import rows as rows_cmd
+from groundline_cli.commands import schema as schema_cmd
 from groundline_cli.config import ConfigError, load_config
 from groundline_cli.lock import LockError, restore_lock, update_lock
 from groundline_cli.pull import (
@@ -26,6 +34,8 @@ from groundline_cli.pull import (
 
 app = typer.Typer(help="Groundline dataset builder CLI")
 app.add_typer(datasets_cmd.app, name="datasets")
+app.add_typer(schema_cmd.app, name="schema")
+app.add_typer(rows_cmd.app, name="rows")
 
 
 @app.command()

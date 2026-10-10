@@ -106,6 +106,14 @@ def to_json_value(value: Any) -> Any:
     return value
 
 
+def parse_document(filename: str, content: bytes, max_nodes: int = DEFAULT_MAX_NODES) -> Any:
+    """The whole parsed .json / .yaml document, by the same rules as records."""
+    text = decode_text(content)
+    if filename.lower().endswith(".json"):
+        return _json_document(text)
+    return _yaml_document(text, max_nodes)
+
+
 def parse_records(
     filename: str,
     content: bytes,

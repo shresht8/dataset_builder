@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import re
+from pathlib import Path
 
 import typer
 
 from groundline_cli.client import ApiClient, ApiError
+from groundline_cli.commands._run import api, fail
 from groundline_cli.config import ConfigError, load_config
+from groundline_cli.schemafile import SchemaFileError, load_schema_file
 
-app = typer.Typer(help="Inspect datasets")
+app = typer.Typer(help="List, create and diff datasets")
 
 _VERSION_PATTERN = re.compile(r"^v(\d+)$")
 
@@ -98,6 +101,29 @@ def _render_diff(result: dict) -> None:
             typer.echo(f"  removed: {', '.join(schema_changes['removed'])}")
         if schema_changes["changed"]:
             typer.echo(f"  changed: {', '.join(schema_changes['changed'])}")
+
+
+@app.command("create")
+def create(
+    name: str,
+    schema: str = typer.Option(..., "--schema", help="schema file (see `schema infer`)"),
+    description: str = typer.Option(None, "--description"),
+) -> None:
+    """Create a dataset and set its schema from a schema file."""
+    try:
+        columns = load_schema_file(Path(schema))
+    except SchemaFileError as exc:
+        fail(str(exc))
+    with api() as client:
+        dataset = client.create_dataset(name, description)
+        try:
+            client.put_schema(dataset["id"], columns)
+        except ApiError as exc:
+            fail(
+                f"dataset '{name}' was created without a schema: {exc}\n"
+                f"fix {schema}, then run: groundline schema push {name} {schema}"
+            )
+    typer.echo(f"created {name} with {len(columns)} columns")
 
 
 @app.command()

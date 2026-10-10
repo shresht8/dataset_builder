@@ -17,7 +17,7 @@ FORMATS = ("jsonl", "json", "yaml")
 SHAPES = ("flat", "nested")
 
 
-class _BlockStyleDumper(yaml.SafeDumper):
+class BlockStyleDumper(yaml.SafeDumper):
     """Emits multi-line strings as block scalars (`|`), per §7."""
 
 
@@ -26,7 +26,7 @@ def _represent_str(dumper: yaml.SafeDumper, data: str) -> yaml.ScalarNode:
     return dumper.represent_scalar("tag:yaml.org,2002:str", data, style=style)
 
 
-_BlockStyleDumper.add_representer(str, _represent_str)
+BlockStyleDumper.add_representer(str, _represent_str)
 
 
 def parse_rows_jsonl(rows_bytes: bytes) -> list[dict]:
@@ -57,7 +57,7 @@ def export_json(manifest: dict, rows: list[dict]) -> bytes:
 def export_yaml(manifest: dict, rows: list[dict]) -> bytes:
     payload = {"manifest": manifest, "rows": rows}
     return yaml.dump(
-        payload, Dumper=_BlockStyleDumper, allow_unicode=True, sort_keys=False
+        payload, Dumper=BlockStyleDumper, allow_unicode=True, sort_keys=False
     ).encode("utf-8")
 
 
