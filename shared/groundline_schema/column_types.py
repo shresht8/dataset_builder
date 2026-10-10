@@ -1,4 +1,4 @@
-"""The seven column types and the column definition model (§3).
+"""The eight column types and the column definition model (§3).
 
 The type set is deliberately small; see the design doc for why. This module is
 the single source of truth for what a column is, shared by API and CLI.
@@ -19,6 +19,7 @@ class ColumnType(str, Enum):
     NUMBER = "number"
     BOOLEAN = "boolean"
     JSON = "json"
+    DATE = "date"
 
 
 class Column(BaseModel):
