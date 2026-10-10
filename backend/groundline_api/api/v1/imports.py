@@ -90,7 +90,9 @@ def _existing_keys(db: Session, dataset_id: uuid.UUID) -> set[str]:
     return set(
         db.scalars(
             select(DatasetRow.row_key).where(
-                DatasetRow.dataset_id == dataset_id, DatasetRow.row_key.is_not(None)
+                DatasetRow.dataset_id == dataset_id,
+                DatasetRow.row_key.is_not(None),
+                DatasetRow.deleted_at.is_(None),
             )
         )
     )

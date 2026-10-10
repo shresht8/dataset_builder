@@ -508,3 +508,35 @@ td.grid-cell .date-input input[type='text'] {
   font-family: ui-monospace, monospace;
   cursor: help;
 }
+
+/* destructive actions (GL-3.5-18) */
+button.danger {
+  background: #b91c1c;
+  color: #fff;
+}
+
+button.danger:disabled {
+  opacity: 0.5;
+}
+
+button.danger-link {
+  margin-left: 6px;
+  background: none;
+  border: none;
+  color: #c0392b;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+@media (prefers-color-scheme: dark) {
+  button.danger-link {
+    color: #f87171;
+  }
+}
+
+.confirm-name {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 8px 0;
+}

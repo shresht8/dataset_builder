@@ -3,14 +3,18 @@
 `rows pull` writes the dataset's rows to a file and records each row's rev and
 base hash in a state file beside it. `rows push` sends the file to the sync API
 with that state, so a row changed in Groundline since the pull is a conflict
-only if you edited it too; rows you didn't touch are skipped.
+only if you edited it too; rows you didn't touch are skipped. `rows delete`
+soft-deletes rows by key -- e.g. every key in a file pushed by mistake.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Annotated
 
 import typer
+from groundline_schema.paths import PathError, flatten
+from groundline_schema.records import RecordProblem, RecordsError, parse_records
 
 from groundline_cli.client import ApiClient, ApiError
 from groundline_cli.commands._run import api, fail
@@ -121,6 +125,12 @@ def _report(result: dict, name: str, file: Path) -> None:
             typer.echo(f"  {where}: {error['reason']}")
     if result["ignored_paths"]:
         typer.echo(f"ignored paths: {', '.join(result['ignored_paths'])}")
+    if result.get("deleted_keys"):
+        typer.echo(
+            f"{len(result['deleted_keys'])} row(s) were deleted in Groundline "
+            f"({', '.join(result['deleted_keys'])}): remove them from {file}, "
+            "or push with --force to recreate them"
+        )
     if result["server_newer_keys"]:
         typer.echo(
             f"{len(result['server_newer_keys'])} row(s) changed in Groundline since your last "
@@ -170,4 +180,65 @@ def push(
     fail(
         "nothing applied: rows pull to take Groundline's changes, "
         "or push with --force to overwrite them"
+    )
+
+
+def _keys_in_file(path: Path, records_key: str | None, key: str) -> list[str]:
+    try:
+        parsed = parse_records(path.name, path.read_bytes(), records_key)
+    except OSError as exc:
+        fail(f"can't read {path}: {exc}")
+    except RecordsError as exc:
+        fail(str(exc))
+    keys = []
+    for record in parsed.records:
+        if isinstance(record, RecordProblem):
+            continue
+        try:
+            value = flatten(record).get(key)
+        except PathError:
+            continue
+        if isinstance(value, str) and value:
+            keys.append(value)
+    return keys
+
+
+@app.command("delete")
+def delete(
+    name: str,
+    keys: Annotated[list[str] | None, typer.Argument(help="key values of the rows to delete")] = None,
+    file: str = typer.Option(None, "--file", help="delete every row whose key is in this file"),
+    records_key: str = typer.Option(None, "--records-key", help="key holding the records"),
+    yes: bool = typer.Option(False, "--yes", help="don't ask for confirmation"),
+) -> None:
+    """Delete rows by key (soft delete: data and history are kept in Groundline)."""
+    if bool(keys) == bool(file):
+        fail("give key values, or --file FILE (not both)")
+    with api() as client:
+        dataset_id = client.resolve_dataset_id(name)
+        _, key = _key_column(client, dataset_id, name)
+        targets = list(keys) if keys else _keys_in_file(Path(file), records_key, key)
+        if not targets:
+            fail(f"no '{key}' values found in {file}")
+        if not yes:
+            typer.confirm(f"Delete {len(targets)} row(s) from {name}?", abort=True)
+        result = client.delete_rows(dataset_id, targets)
+    if result["not_found"]:
+        fail(
+            "nothing deleted: not found in " + name + ": " + ", ".join(result["not_found"])
+        )
+    typer.echo(f"deleted {result['deleted']} row(s) from {name}")
+    if file:
+        _forget_keys(Path(file), name, dataset_id, set(targets))
+
+
+def _forget_keys(rows_file: Path, name: str, dataset_id: str, keys: set[str]) -> None:
+    """Drop deleted keys from the file's sync state, so a push creates them afresh."""
+    state = load_state(rows_file, name, dataset_id)
+    if state is None:
+        return
+    save_state(
+        rows_file, name, dataset_id, state["key_column"],
+        {k: v for k, v in state["revs"].items() if k not in keys},
+        {k: v for k, v in state["bases"].items() if k not in keys},
     )

@@ -95,6 +95,15 @@ class ApiClient:
     def list_rows(self, dataset_id: str) -> list[dict]:
         return self._request("GET", f"/datasets/{dataset_id}/rows").json()
 
+    def delete_rows(self, dataset_id: str, keys: list[str]) -> dict:
+        """Soft-delete rows by key value, all or nothing (GL-3.5-18)."""
+        return self._request(
+            "POST", f"/datasets/{dataset_id}/rows/delete", json={"keys": keys}
+        ).json()
+
+    def delete_dataset(self, dataset_id: str) -> None:
+        self._request("DELETE", f"/datasets/{dataset_id}")
+
     def sync(
         self,
         dataset_id: str,

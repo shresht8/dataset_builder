@@ -205,7 +205,13 @@ def _backfill_row_keys(db: Session, dataset_id: uuid.UUID, key: str | None) -> N
     Old values are cleared and flushed first, so swapping keys between rows
     can't trip the unique index halfway through.
     """
-    rows = list(db.scalars(select(DatasetRow).where(DatasetRow.dataset_id == dataset_id)))
+    rows = list(
+        db.scalars(
+            select(DatasetRow).where(
+                DatasetRow.dataset_id == dataset_id, DatasetRow.deleted_at.is_(None)
+            )
+        )
+    )
     if key is not None:
         problems = _key_problems(rows, key)
         if problems:

@@ -5,19 +5,25 @@
     PATCH /datasets/{id}/rows/{rid}   If-Match: <rev>   data/status/assignee (§4, §8)
     GET/POST /datasets/{id}/rows/{rid}/comments   row comment thread (§4, GL-2-4)
     GET   /datasets/{id}/rows/{rid}/edits         append-only edit history (§3, GL-2-4)
+    DELETE /datasets/{id}/rows/{rid}  If-Match: <rev>   soft delete (editor+, GL-3.5-18)
+    POST  /datasets/{id}/rows/delete  {"ids": [...]} | {"keys": [...]}   bulk soft delete
 
 When the dataset has a key column, create/patch keep `row_key` in sync with
 its value; a value another row already uses is a 409, and changing an
 existing row's key value needs editor+ (GL-3.5-13).
+
+A deleted row keeps its data and audit trail but is gone everywhere: lists,
+patch/comments/edits (404), version cuts, key uniqueness, import and sync.
 """
 
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timezone
 from typing import Annotated, Any
 
 import sqlalchemy as sa
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Response
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from groundline_schema import ColumnType
@@ -31,7 +37,13 @@ from groundline_api.models.dataset import Dataset, DatasetColumn
 from groundline_api.models.row import DatasetRow, RowEdit, RowStatus
 from groundline_api.models.user import Role, User
 from groundline_api.schemas.comment import CommentCreate, CommentRead
-from groundline_api.schemas.row import RowCreate, RowEditRead, RowPatch, RowRead
+from groundline_api.schemas.row import (
+    RowCreate,
+    RowEditRead,
+    RowPatch,
+    RowRead,
+    RowsDelete,
+)
 from groundline_api.services.validation import key_column, validate_row_data
 
 router = APIRouter(prefix="/datasets", tags=["rows"])
@@ -57,9 +69,11 @@ def _columns_of(db: Session, dataset_id: uuid.UUID) -> list[DatasetColumn]:
 def _ensure_key_free(
     db: Session, dataset_id: uuid.UUID, value: str, row_id: uuid.UUID | None = None
 ) -> None:
-    """409 if another row of the dataset already uses this key value."""
+    """409 if another live row of the dataset already uses this key value."""
     stmt = select(DatasetRow.id).where(
-        DatasetRow.dataset_id == dataset_id, DatasetRow.row_key == value
+        DatasetRow.dataset_id == dataset_id,
+        DatasetRow.row_key == value,
+        DatasetRow.deleted_at.is_(None),
     )
     if row_id is not None:
         stmt = stmt.where(DatasetRow.id != row_id)
@@ -89,7 +103,9 @@ def list_rows(
     q: str | None = None,
 ) -> list[DatasetRow]:
     _get_dataset_or_404(db, dataset_id)
-    stmt = select(DatasetRow).where(DatasetRow.dataset_id == dataset_id)
+    stmt = select(DatasetRow).where(
+        DatasetRow.dataset_id == dataset_id, DatasetRow.deleted_at.is_(None)
+    )
     if status is not None:
         stmt = stmt.where(DatasetRow.status == status)
     if assignee is not None:
@@ -140,9 +156,74 @@ def create_row(
 
 def _get_row_or_404(db: Session, dataset_id: uuid.UUID, row_id: uuid.UUID) -> DatasetRow:
     row = db.get(DatasetRow, row_id)
-    if row is None or row.dataset_id != dataset_id:
+    if row is None or row.dataset_id != dataset_id or row.deleted_at is not None:
         raise HTTPException(status_code=404, detail="row not found")
     return row
+
+
+def _soft_delete(db: Session, row: DatasetRow, user: User) -> None:
+    row.deleted_at = datetime.now(timezone.utc)
+    row.deleted_by = user.id
+    row.rev = row.rev + 1
+    row.updated_by = user.id
+    db.add(RowEdit(row_id=row.id, field="deleted", old_value=False, new_value=True, user_id=user.id))
+
+
+@router.delete("/{dataset_id}/rows/{row_id}", status_code=204)
+def delete_row(
+    dataset_id: uuid.UUID,
+    row_id: uuid.UUID,
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[User, Depends(require_role(Role.EDITOR))],
+    if_match: Annotated[str | None, Header(alias="If-Match")] = None,
+) -> Response:
+    """Soft-delete one row; optimistic locking as for PATCH."""
+    _get_dataset_or_404(db, dataset_id)
+    row = _get_row_or_404(db, dataset_id, row_id)
+    if if_match is None:
+        raise HTTPException(status_code=428, detail="If-Match header required")
+    try:
+        expected_rev = int(if_match)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="If-Match must be an integer rev")
+    if row.rev != expected_rev:
+        return JSONResponse(status_code=409, content=jsonable_encoder(RowRead.model_validate(row)))
+    _soft_delete(db, row, user)
+    db.commit()
+    return Response(status_code=204)
+
+
+@router.post("/{dataset_id}/rows/delete")
+def delete_rows(
+    dataset_id: uuid.UUID,
+    payload: RowsDelete,
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[User, Depends(require_role(Role.EDITOR))],
+) -> dict[str, Any]:
+    """Soft-delete rows by id or by key value, all or nothing.
+
+    Anything not found (or already deleted) is reported and nothing is
+    deleted, so a typo can't half-apply a cleanup.
+    """
+    _get_dataset_or_404(db, dataset_id)
+    live = select(DatasetRow).where(
+        DatasetRow.dataset_id == dataset_id, DatasetRow.deleted_at.is_(None)
+    )
+    if payload.ids is not None:
+        rows = list(db.scalars(live.where(DatasetRow.id.in_(payload.ids))))
+        found = {str(row.id) for row in rows}
+        not_found = [str(i) for i in payload.ids if str(i) not in found]
+    else:
+        keys = payload.keys or []
+        rows = list(db.scalars(live.where(DatasetRow.row_key.in_(keys))))
+        found = {row.row_key for row in rows}
+        not_found = [k for k in keys if k not in found]
+    if not_found:
+        return {"deleted": 0, "not_found": not_found}
+    for row in rows:
+        _soft_delete(db, row, user)
+    db.commit()
+    return {"deleted": len(rows), "not_found": []}
 
 
 @router.patch("/{dataset_id}/rows/{row_id}", response_model=RowRead)

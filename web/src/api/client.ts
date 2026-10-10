@@ -62,6 +62,10 @@ export function listDatasets(): Promise<Dataset[]> {
   return apiFetch<Dataset[]>('/datasets')
 }
 
+export function getDataset(datasetId: string): Promise<Dataset> {
+  return apiFetch<Dataset>(`/datasets/${datasetId}`)
+}
+
 export function getSchema(datasetId: string): Promise<Schema> {
   return apiFetch<Schema>(`/datasets/${datasetId}/schema`)
 }
@@ -111,6 +115,20 @@ export function patchRow(
     headers: { 'If-Match': String(rev) },
     body: JSON.stringify(payload),
   })
+}
+
+// Soft delete (GL-3.5-18): editor+, optimistic locking as for PATCH (a 409
+// carries the row's current state).
+export function deleteRow(datasetId: string, rowId: string, rev: number): Promise<void> {
+  return apiFetch<void>(`/datasets/${datasetId}/rows/${rowId}`, {
+    method: 'DELETE',
+    headers: { 'If-Match': String(rev) },
+  })
+}
+
+// Only a dataset without versions can be deleted (409 otherwise).
+export function deleteDataset(datasetId: string): Promise<void> {
+  return apiFetch<void>(`/datasets/${datasetId}`, { method: 'DELETE' })
 }
 
 export function listComments(datasetId: string, rowId: string): Promise<RowComment[]> {

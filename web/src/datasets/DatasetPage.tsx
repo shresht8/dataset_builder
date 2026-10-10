@@ -4,13 +4,18 @@
 // comments, and the 409 conflict UI are the workflow layer added in GL-2-7.
 // Editing follows the role (GL-3.5-14): viewers get no edit affordances, and
 // an existing row's key value can only be changed by editors and admins.
+// Editors can delete rows (soft) and, while it has no versions, the dataset
+// itself (GL-3.5-18).
 import { createColumnHelper, flexRender, tableFeatures, useTable } from '@tanstack/react-table'
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams } from 'react-router-dom'
 import {
   ApiError,
   createRow,
+  deleteRow,
+  getDataset,
   getSchema,
+  listVersions,
   listRows,
   listUsers,
   patchRow,
@@ -20,6 +25,8 @@ import type { Column, Role, Row, User } from '../api/types'
 import { useAuth } from '../auth/AuthContext'
 import { CellDisplay, CellEditor, MultiSelectEditor } from './Cell'
 import { CommentsPanel } from './CommentsPanel'
+import { ConfirmDialog } from './ConfirmDialog'
+import { DeleteDatasetDialog } from './DeleteDatasetDialog'
 import { DATE_HINT, isDate } from './dates'
 import { ConflictDialog } from './ConflictDialog'
 import { DetailDrawer } from './DetailDrawer'
@@ -135,6 +142,12 @@ export function DatasetPage() {
   const [customViews, setCustomViews] = useState<SavedView[]>([])
   const [importOpen, setImportOpen] = useState(false)
   const [versionsOpen, setVersionsOpen] = useState(false)
+  const navigate = useNavigate()
+  const [datasetName, setDatasetName] = useState<string | null>(null)
+  // Versions pin a dataset: only one with none can be deleted (GL-3.5-18).
+  const [versionCount, setVersionCount] = useState<number | null>(null)
+  const [deleteDatasetOpen, setDeleteDatasetOpen] = useState(false)
+  const [rowToDelete, setRowToDelete] = useState<Row | null>(null)
   const cellRefs = useRef(new Map<string, HTMLTableCellElement>())
 
   useEffect(() => {
@@ -155,6 +168,16 @@ export function DatasetPage() {
     if (!datasetId) return
     setCustomViews(loadCustomViews(datasetId))
   }, [datasetId])
+
+  useEffect(() => {
+    if (!datasetId || !canImport) return
+    getDataset(datasetId)
+      .then((dataset) => setDatasetName(dataset.name))
+      .catch(() => setDatasetName(null))
+    listVersions(datasetId)
+      .then((versions) => setVersionCount(versions.length))
+      .catch(() => setVersionCount(null))
+  }, [datasetId, canImport, versionsOpen])
 
   useEffect(() => {
     if (!isAdmin) {
@@ -306,6 +329,22 @@ export function DatasetPage() {
       return Promise.resolve(null)
     }
     return applyRowPatch(rowId, { data: { [colKey]: value } })
+  }
+
+  async function confirmDeleteRow(row: Row): Promise<string | null> {
+    if (!datasetId) return null
+    try {
+      await deleteRow(datasetId, row.id, row.rev)
+      setRows((prev) => (prev ?? []).filter((r) => r.id !== row.id))
+      return null
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 409 && isRowBody(err.body)) {
+        const theirs = err.body
+        setRows((prev) => (prev ?? []).map((r) => (r.id === row.id ? theirs : r)))
+        return 'This row changed since you loaded it; review the latest version first.'
+      }
+      return err instanceof ApiError ? err.message : 'Delete failed'
+    }
   }
 
   function handleStatusChange(rowId: string, status: string) {
@@ -563,6 +602,17 @@ export function DatasetPage() {
         <button type="button" onClick={() => setVersionsOpen(true)}>
           Versions
         </button>
+        {canImport && datasetName && (
+          <button
+            type="button"
+            className="danger"
+            disabled={versionCount !== 0}
+            title={versionCount === 0 ? undefined : 'A dataset with versions cannot be deleted'}
+            onClick={() => setDeleteDatasetOpen(true)}
+          >
+            Delete dataset
+          </button>
+        )}
       </div>
       <FilterBar
         filters={filters}
@@ -665,6 +715,16 @@ export function DatasetPage() {
                       <button type="button" onClick={() => setCommentsRowId(fullRow.id)}>
                         Comments
                       </button>
+                      {canImport && (
+                        <button
+                          type="button"
+                          className="danger-link"
+                          aria-label="Delete row"
+                          onClick={() => setRowToDelete(fullRow)}
+                        >
+                          Delete
+                        </button>
+                      )}
                     </td>
                   </>
                 )}
@@ -712,6 +772,27 @@ export function DatasetPage() {
           columns={orderedColumns}
           onClose={() => setImportOpen(false)}
           onImported={reloadRows}
+        />
+      )}
+      {rowToDelete && (
+        <ConfirmDialog
+          title="Delete this row?"
+          confirmLabel="Delete row"
+          onConfirm={() => confirmDeleteRow(rowToDelete)}
+          onClose={() => setRowToDelete(null)}
+        >
+          <p>
+            It disappears from the grid, future versions, sync and pull. Its data and history are kept, and a key
+            it used becomes free again.
+          </p>
+        </ConfirmDialog>
+      )}
+      {deleteDatasetOpen && datasetId && datasetName && (
+        <DeleteDatasetDialog
+          datasetId={datasetId}
+          name={datasetName}
+          onDeleted={() => navigate('/')}
+          onClose={() => setDeleteDatasetOpen(false)}
         />
       )}
       {versionsOpen && datasetId && (

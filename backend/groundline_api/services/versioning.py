@@ -80,7 +80,9 @@ def cut_version(
     columns = _schema_columns(db, dataset_id)
     allowed_keys = {c.key for c in columns}
 
-    row_stmt = select(DatasetRow).where(DatasetRow.dataset_id == dataset_id)
+    row_stmt = select(DatasetRow).where(
+        DatasetRow.dataset_id == dataset_id, DatasetRow.deleted_at.is_(None)
+    )
     if not include_unapproved:
         row_stmt = row_stmt.where(DatasetRow.status == RowStatus.APPROVED)
     row_stmt = row_stmt.order_by(DatasetRow.created_at, DatasetRow.id)

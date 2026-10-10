@@ -126,6 +126,21 @@ def create(
     typer.echo(f"created {name} with {len(columns)} columns")
 
 
+@app.command("delete")
+def delete(
+    name: str,
+    yes: bool = typer.Option(False, "--yes", help="don't ask for confirmation"),
+) -> None:
+    """Delete a dataset that has no versions (its name becomes free again)."""
+    if not yes:
+        typed = typer.prompt(f"Type the dataset name to delete it ({name})")
+        if typed != name:
+            fail("name didn't match; nothing deleted")
+    with api() as client:
+        client.delete_dataset(client.resolve_dataset_id(name))
+    typer.echo(f"deleted {name}")
+
+
 @app.command()
 def diff(dataset: str, from_version: str, to_version: str) -> None:
     """Report rows added, removed, and modified between two versions."""

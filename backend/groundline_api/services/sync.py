@@ -11,7 +11,11 @@ key column; for each existing key, in order:
   3. `revs[key]` equals the row's rev, or `force`: `update`.
   4. otherwise: `conflict` (edited on both sides, or never pulled).
 
-New keys are created as draft rows. An update merges fields: a column in the
+New keys are created as draft rows -- except a key that belongs only to a
+deleted row and was pulled before the delete (it's in `revs`): that's reported
+in `deleted_keys` and skipped, unless `force` recreates it (GL-3.5-18).
+
+An update merges fields: a column in the
 record overwrites, an absent column is left alone, an explicit null clears.
 A changed row that was approved goes back to needs_review. Sync never deletes.
 
@@ -114,20 +118,39 @@ def sync(
         row.row_key: row
         for row in db.scalars(
             select(DatasetRow)
-            .where(DatasetRow.dataset_id == dataset_id, DatasetRow.row_key.in_(list(first_row)))
+            .where(
+                DatasetRow.dataset_id == dataset_id,
+                DatasetRow.row_key.in_(list(first_row)),
+                DatasetRow.deleted_at.is_(None),
+            )
             .with_for_update()
         )
     }
+    # Keys the caller pulled that now belong only to a deleted row.
+    pulled_missing = [k for k in first_row if k not in existing and k in options.revs]
+    deleted_keys = set(
+        db.scalars(
+            select(DatasetRow.row_key).where(
+                DatasetRow.dataset_id == dataset_id,
+                DatasetRow.row_key.in_(pulled_missing),
+                DatasetRow.deleted_at.is_not(None),
+            )
+        )
+    ) if pulled_missing else set()
 
     creates: list[tuple[str, dict[str, Any]]] = []
     updates: list[tuple[DatasetRow, dict[str, Any], dict[str, tuple[Any, Any]]]] = []
     unchanged: list[DatasetRow] = []
     server_newer: list[str] = []
+    skipped_deleted: list[str] = []
     changes: list[dict[str, Any]] = []
     conflicts: list[dict[str, Any]] = []
 
     for key, data, cleared in records:
         row = existing.get(key)
+        if row is None and key in deleted_keys and not options.force:
+            skipped_deleted.append(key)
+            continue
         if row is None:
             failures = row_errors(data, columns)
             errors += [{"key": key, "column": c, "reason": reason} for c, reason in failures]
@@ -184,6 +207,7 @@ def sync(
         .where(
             DatasetRow.dataset_id == dataset_id,
             DatasetRow.row_key.is_not(None),
+            DatasetRow.deleted_at.is_(None),
             DatasetRow.row_key.not_in(in_file) if in_file else sa.true(),
         )
     )
@@ -229,6 +253,7 @@ def sync(
         "changes": changes,
         "conflicts": conflicts,
         "server_newer_keys": server_newer,
+        "deleted_keys": skipped_deleted,
         "errors": errors,
         "ignored_paths": unknown if options.ignore_unknown else [],
         "revs": revs,
