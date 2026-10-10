@@ -49,6 +49,8 @@ def _schema_columns(db: Session, dataset_id: uuid.UUID) -> list[Column]:
             required=c.required,
             order=c.order,
             archived=c.archived,
+            json_schema=c.json_schema,
+            is_key=c.is_key,
         )
         for c in orm_columns
     ]

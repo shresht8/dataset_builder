@@ -3,16 +3,61 @@
 Shared by row create/patch (GL-2-1, `api/v1/rows.py`) and CSV/XLSX import
 (GL-2-8, `services/importer.py`) so type and required-field checks live in
 exactly one place.
+
+`json` columns (GL-3.5-13): any JSON value; only null is empty; the value is
+checked against the column's optional JSON Schema and a serialised size cap.
+The key column's value must have no leading/trailing whitespace.
 """
 
 from __future__ import annotations
 
+import json
+from functools import lru_cache
 from typing import Any
 
 from fastapi import HTTPException
 from groundline_schema import ColumnType
+from jsonschema import Draft202012Validator
+from jsonschema.exceptions import best_match
+from referencing.exceptions import Unresolvable
 
+from groundline_api.config import settings
 from groundline_api.models.dataset import DatasetColumn
+
+
+def key_column(columns: list[DatasetColumn]) -> DatasetColumn | None:
+    """The dataset's active key column, if it has one (GL-3.5-12)."""
+    return next((c for c in columns if c.is_key and not c.archived), None)
+
+
+@lru_cache(maxsize=256)
+def _validator(schema_json: str) -> Draft202012Validator:
+    return Draft202012Validator(json.loads(schema_json))
+
+
+def _json_path(path: Any) -> str:
+    """`deque([0, 'args'])` -> `[0].args`."""
+    text = ""
+    for part in path:
+        text += f"[{part}]" if isinstance(part, int) else f".{part}"
+    return text.lstrip(".")
+
+
+def _json_error(col: DatasetColumn, value: Any) -> str | None:
+    size = len(json.dumps(value, ensure_ascii=False).encode("utf-8"))
+    if size > settings.json_cell_max_bytes:
+        return f"value is {size} bytes; the limit is {settings.json_cell_max_bytes}"
+    if not col.json_schema:
+        return None
+    validator = _validator(json.dumps(col.json_schema, sort_keys=True))
+    try:
+        error = best_match(validator.iter_errors(value))
+    except Unresolvable as exc:
+        return f"json_schema has an unresolvable $ref: {exc}"
+    if error is None:
+        return None
+    where = _json_path(error.absolute_path)
+    return f"{where}: {error.message}" if where else error.message
 
 
 def is_empty(value: Any) -> bool:
@@ -47,6 +92,10 @@ def type_error(col: DatasetColumn, value: Any) -> str | None:
         bad = [v for v in value if v not in (col.options or [])]
         if bad:
             return f"{bad} not in {col.options}"
+    elif col.type == ColumnType.JSON:
+        return _json_error(col, value)
+    if col.is_key and isinstance(value, str) and value != value.strip():
+        return "key value must not have leading or trailing whitespace"
     return None
 
 
@@ -62,7 +111,8 @@ def row_errors(data: dict[str, Any], columns: list[DatasetColumn]) -> list[tuple
         if col.archived:
             continue
         value = data.get(col.key)
-        if is_empty(value):
+        # For `json` only null is empty: "", [], {}, 0 and false are values.
+        if value is None if col.type == ColumnType.JSON else is_empty(value):
             if col.required:
                 errors.append((col.key, "required"))
             continue

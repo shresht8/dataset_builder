@@ -88,9 +88,10 @@ class ApiClient:
             "GET", f"/datasets/{dataset_id}/versions/{version}/manifest"
         ).json()
 
-    def get_jsonschema(self, dataset_id: str, version: int) -> dict:
+    def get_jsonschema(self, dataset_id: str, version: int, shape: str = "flat") -> dict:
+        params = {"shape": shape} if shape != "flat" else None
         return self._request(
-            "GET", f"/datasets/{dataset_id}/versions/{version}/jsonschema"
+            "GET", f"/datasets/{dataset_id}/versions/{version}/jsonschema", params=params
         ).json()
 
     def get_diff(self, dataset_id: str, from_version: int, to_version: int) -> dict:

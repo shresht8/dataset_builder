@@ -29,6 +29,9 @@ class Settings(BaseSettings):
     role_mapping: str = '{"default": "viewer"}'
 
     pat_default_ttl_days: int = 90
+    # GL-3.5-13: serialised size cap for one `json` cell (large blobs make the
+    # grid unusable).
+    json_cell_max_bytes: int = 256 * 1024
     # Signs session cookies (GL-1-9). The default is for local dev only.
     app_secret_key: str = "change-me"
 

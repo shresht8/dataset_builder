@@ -5,6 +5,7 @@ description = "Shared schema, column types, manifest and JSON Schema sidecar for
 requires-python = ">=3.11"
 dependencies = [
     "pydantic>=2",
+    "pyyaml",             # shared yaml rendering for API export + CLI pull (GL-3.5-13)
 ]
 
 [build-system]

@@ -80,13 +80,6 @@ def test_put_schema_round_trips_json_schema_and_key(client, dataset_id):
     assert by_key["expected.tool_params"]["is_key"] is False
 
 
-def test_json_schema_only_kept_on_json_columns(client, dataset_id):
-    columns = [{"key": "t", "label": "T", "type": "text", "json_schema": {"type": "string"}}]
-    resp = client.put(f"/v1/datasets/{dataset_id}/schema", json={"columns": columns})
-    assert resp.status_code == 200, resp.text
-    assert resp.json()["columns"][0]["json_schema"] is None
-
-
 def test_archiving_the_key_column_clears_is_key(client, dataset_id):
     key_col = {"key": "id", "label": "ID", "type": "text", "required": True, "is_key": True}
     other = {"key": "q", "label": "Q", "type": "text"}

@@ -10,16 +10,29 @@ from __future__ import annotations
 from groundline_schema.column_types import Column, ColumnType
 
 # `services/validation.py::is_empty` treats None, "" (after strip) and [] as
-# "empty" for *any* column type, before it ever looks at the column's declared
-# type. An optional column can therefore be stored as any of these three
+# "empty" for every column type except `json` (where only null is empty),
+# before it ever looks at the column's declared type. An optional column can therefore be stored as any of these three
 # regardless of its type, in addition to a properly-typed value. The sidecar
 # must accept all of it (C3: "must accept every row that passed row
 # validation").
 _EMPTY_VARIANTS: list[dict] = [{"type": "null"}, {"const": ""}, {"const": []}]
 
 
+def _json_fragment(column: Column) -> dict:
+    """A `json` column's own JSON Schema, or `{}` (any value) if it has none.
+
+    `$schema` only belongs at a resource root, so it is dropped from the copy
+    embedded here.
+    """
+    fragment = dict(column.json_schema or {})
+    fragment.pop("$schema", None)
+    return fragment
+
+
 def _type_schema(column: Column) -> dict:
     """The JSON Schema fragment for a properly-typed, non-empty value."""
+    if column.type == ColumnType.JSON:
+        return _json_fragment(column)
     if column.type in (ColumnType.TEXT, ColumnType.LONG_TEXT):
         return {"type": "string"}
     if column.type == ColumnType.NUMBER:
@@ -49,6 +62,14 @@ def build_json_schema(columns: list[Column]) -> dict:
     required: list[str] = []
     for column in columns:
         type_schema = _type_schema(column)
+        if column.type == ColumnType.JSON:
+            # For `json` only null is empty (GL-3.5-13): "" and [] are values.
+            if column.required:
+                properties[column.key] = {"allOf": [type_schema, {"not": {"type": "null"}}]}
+                required.append(column.key)
+            else:
+                properties[column.key] = {"anyOf": [type_schema, {"type": "null"}]}
+            continue
         if column.required:
             # `is_empty` (validation.py) rejects "" and [] for a required
             # column regardless of type; the plain type schema alone would
@@ -72,3 +93,31 @@ def build_json_schema(columns: list[Column]) -> dict:
     if required:
         schema["required"] = required
     return schema
+
+
+def nest_json_schema(flat_schema: dict) -> dict:
+    """The nested-shape counterpart of a `build_json_schema` result (GL-3.5-13).
+
+    Dotted property keys become nested object schemas with
+    `additionalProperties: false` at every level. An intermediate object is
+    required only if one of its descendants is.
+    """
+    required_keys = set(flat_schema.get("required", []))
+    nested = {k: v for k, v in flat_schema.items() if k not in ("properties", "required")}
+    nested["properties"] = {}
+    for key, prop in flat_schema["properties"].items():
+        segments = key.split(".")
+        node = nested
+        for index, segment in enumerate(segments):
+            if key in required_keys:
+                node.setdefault("required", [])
+                if segment not in node["required"]:
+                    node["required"].append(segment)
+            if index == len(segments) - 1:
+                node["properties"][segment] = prop
+            else:
+                node = node["properties"].setdefault(
+                    segment,
+                    {"type": "object", "properties": {}, "additionalProperties": False},
+                )
+    return nested
