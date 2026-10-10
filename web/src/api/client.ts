@@ -170,14 +170,18 @@ export function cutVersion(datasetId: string, payload: VersionCutPayload): Promi
 // Import preview (§4, GL-2-9): parses the upload only, persists nothing.
 // Without `mapping`, returns detected columns + a suggested auto-mapping and
 // a sample. With `mapping`, additionally returns the full validation report.
+// `recordsKey` picks the list of records in a JSON/YAML file (GL-3.5-5); when
+// one is needed, the 422's body carries `records_key_candidates`.
 export function previewImport(
   datasetId: string,
   file: File,
   mapping?: Record<string, string>,
+  recordsKey?: string,
 ): Promise<ImportPreviewResponse> {
   const form = new FormData()
   form.append('file', file)
   if (mapping) form.append('mapping', JSON.stringify(mapping))
+  if (recordsKey) form.append('records_key', recordsKey)
   return apiFetchForm<ImportPreviewResponse>(`/datasets/${datasetId}/import/preview`, form)
 }
 
@@ -189,11 +193,13 @@ export function commitImport(
   mapping: Record<string, string>,
   skip: number[],
   fixes: Record<number, Record<string, unknown>>,
+  recordsKey?: string,
 ): Promise<ImportCommitResponse> {
   const form = new FormData()
   form.append('file', file)
   form.append('mapping', JSON.stringify(mapping))
   if (skip.length > 0) form.append('skip', JSON.stringify(skip))
   if (Object.keys(fixes).length > 0) form.append('fixes', JSON.stringify(fixes))
+  if (recordsKey) form.append('records_key', recordsKey)
   return apiFetchForm<ImportCommitResponse>(`/datasets/${datasetId}/import`, form)
 }

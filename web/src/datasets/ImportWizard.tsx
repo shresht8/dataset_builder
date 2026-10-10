@@ -2,6 +2,11 @@
 // onto the schema -> review validation errors with inline fix/skip -> commit.
 // Escape closes it, same pattern as CommentsPanel/DetailDrawer.
 //
+// JSON / JSONL / YAML (GL-3.5-6): nested records arrive as dotted source
+// columns; the API reports which list the records came from (and offers the
+// candidates when it can't tell). Import stays create-only: a key that
+// already exists is a row error pointing at `rows push`.
+//
 // The backend's `POST /import` (GL-2-8) has no server-side import session:
 // each call re-parses the whole file and re-applies `skip`/`fixes` from
 // scratch. So a retry round (fix more rows, import again) would re-create
@@ -11,7 +16,56 @@
 // commit call.
 import { useState, type KeyboardEvent } from 'react'
 import { ApiError, commitImport, previewImport } from '../api/client'
-import type { Column, ImportSampleRow, ImportValidationError } from '../api/types'
+import type { Column, ImportPreviewResponse, ImportSampleRow, ImportValidationError } from '../api/types'
+import { formatJson, parseJsonText, summarizeJson } from './json'
+
+const ACCEPTED = '.csv,.xlsx,.json,.jsonl,.ndjson,.yaml,.yml'
+
+// Sample values are strings for CSV/XLSX and typed for JSON/YAML.
+function showValue(value: unknown): string {
+  if (value === null || value === undefined) return ''
+  if (typeof value === 'object') return summarizeJson(value)
+  return String(value)
+}
+
+function candidatesOf(err: unknown): string[] | null {
+  if (!(err instanceof ApiError) || err.status !== 422) return null
+  const body = err.body as { records_key_candidates?: unknown } | null
+  return Array.isArray(body?.records_key_candidates) ? (body.records_key_candidates as string[]) : null
+}
+
+/** Inline fix for a json column: applied only while it parses. Unparseable text
+ * clears the fix, so the row fails again on its original error instead of
+ * quietly importing an earlier value. */
+function JsonFixInput({
+  value,
+  disabled,
+  onChange,
+}: {
+  value: unknown
+  disabled: boolean
+  onChange: (value: unknown) => void
+}) {
+  const [text, setText] = useState(() => (value === undefined ? '' : formatJson(value)))
+  const parsed = parseJsonText(text)
+  return (
+    <span className="json-fix">
+      <textarea
+        className="json-editor"
+        disabled={disabled}
+        spellCheck={false}
+        value={text}
+        aria-invalid={parsed.ok ? undefined : true}
+        onChange={(event) => {
+          setText(event.target.value)
+          const next = parseJsonText(event.target.value)
+          onChange(next.ok ? next.value : undefined)
+        }}
+      />
+      {!parsed.ok && <span className="field-error">{parsed.error}</span>}
+    </span>
+  )
+}
 
 interface ImportWizardProps {
   datasetId: string
@@ -66,6 +120,9 @@ function FixInput({
       </select>
     )
   }
+  if (column?.type === 'json') {
+    return <JsonFixInput value={value} disabled={disabled} onChange={onChange} />
+  }
   if (column?.type === 'multi_select') {
     const selected = Array.isArray(value) ? (value as string[]) : []
     return (
@@ -105,6 +162,10 @@ export function ImportWizard({ datasetId, columns, onClose, onImported }: Import
   const [sourceColumns, setSourceColumns] = useState<string[]>([])
   const [mapping, setMapping] = useState<Record<string, string>>({})
   const [sampleRows, setSampleRows] = useState<ImportSampleRow[]>([])
+  // JSON/YAML: where the records came from, and the choice when ambiguous.
+  const [recordsKey, setRecordsKey] = useState<string | undefined>(undefined)
+  const [ignoredKeys, setIgnoredKeys] = useState<string[]>([])
+  const [recordsKeyChoices, setRecordsKeyChoices] = useState<string[] | null>(null)
   const [totalRows, setTotalRows] = useState(0)
   const [validCount, setValidCount] = useState(0)
   const [errors, setErrors] = useState<ImportValidationError[]>([])
@@ -116,22 +177,36 @@ export function ImportWizard({ datasetId, columns, onClose, onImported }: Import
   const [error, setError] = useState<string | null>(null)
   const [done, setDone] = useState(false)
 
-  async function handleFile(chosen: File) {
+  function showPreview(preview: ImportPreviewResponse) {
+    setSourceColumns(preview.columns)
+    setMapping(preview.suggested_mapping)
+    setSampleRows(preview.sample_rows)
+    setTotalRows(preview.total_rows)
+    setRecordsKey(preview.records_key ?? undefined)
+    setIgnoredKeys(preview.ignored_keys ?? [])
+    setRecordsKeyChoices(null)
+    setStep('mapping')
+  }
+
+  async function loadPreview(chosen: File, key?: string) {
     setFile(chosen)
     setBusy(true)
     setError(null)
     try {
-      const preview = await previewImport(datasetId, chosen)
-      setSourceColumns(preview.columns)
-      setMapping(preview.suggested_mapping)
-      setSampleRows(preview.sample_rows)
-      setTotalRows(preview.total_rows)
-      setStep('mapping')
+      showPreview(await previewImport(datasetId, chosen, undefined, key))
     } catch (err) {
+      const candidates = candidatesOf(err)
+      if (candidates && candidates.length > 0) setRecordsKeyChoices(candidates)
       setError(err instanceof ApiError ? err.message : 'Could not read file')
     } finally {
       setBusy(false)
     }
+  }
+
+  function handleFile(chosen: File) {
+    setRecordsKey(undefined)
+    setRecordsKeyChoices(null)
+    void loadPreview(chosen)
   }
 
   function setColumnMapping(sourceCol: string, schemaKey: string) {
@@ -148,7 +223,7 @@ export function ImportWizard({ datasetId, columns, onClose, onImported }: Import
     setBusy(true)
     setError(null)
     try {
-      const preview = await previewImport(datasetId, file, mapping)
+      const preview = await previewImport(datasetId, file, mapping, recordsKey)
       setValidCount(preview.validation?.valid ?? 0)
       setErrors(preview.validation?.errors ?? [])
       setStep('review')
@@ -178,7 +253,7 @@ export function ImportWizard({ datasetId, columns, onClose, onImported }: Import
     setError(null)
     const effectiveSkip = new Set([...handledRows, ...activeSkip])
     try {
-      const result = await commitImport(datasetId, file, mapping, [...effectiveSkip], fixes)
+      const result = await commitImport(datasetId, file, mapping, [...effectiveSkip], fixes, recordsKey)
       const remainingRows = new Set(result.errors.map((e) => e.row))
       const importedThisRound = new Set<number>()
       for (let row = 1; row <= totalRows; row += 1) {
@@ -227,21 +302,48 @@ export function ImportWizard({ datasetId, columns, onClose, onImported }: Import
 
         {step === 'upload' && (
           <div>
-            <p>Upload a CSV or XLSX file to import rows.</p>
+            <p>Upload a CSV, XLSX, JSON, JSONL or YAML file to import rows.</p>
             <input
               type="file"
-              accept=".csv,.xlsx"
+              accept={ACCEPTED}
               disabled={busy}
               onChange={(event) => {
                 const chosen = event.target.files?.[0]
-                if (chosen) void handleFile(chosen)
+                if (chosen) handleFile(chosen)
               }}
             />
+            {recordsKeyChoices && file && (
+              <label className="records-key-choice">
+                Which list holds the records?{' '}
+                <select
+                  value=""
+                  disabled={busy}
+                  onChange={(event) => {
+                    if (event.target.value === '') return
+                    setRecordsKey(event.target.value)
+                    void loadPreview(file, event.target.value)
+                  }}
+                >
+                  <option value="">Choose…</option>
+                  {recordsKeyChoices.map((key) => (
+                    <option key={key} value={key}>
+                      {key}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
           </div>
         )}
 
         {step === 'mapping' && (
           <div>
+            {recordsKey && (
+              <p className="hint">
+                Rows from <code>{recordsKey}</code>
+                {ignoredKeys.length > 0 && <>; ignored: {ignoredKeys.join(', ')}</>}
+              </p>
+            )}
             <table className="import-table">
               <thead>
                 <tr>
@@ -295,7 +397,7 @@ export function ImportWizard({ datasetId, columns, onClose, onImported }: Import
                   {sampleRows.map((r) => (
                     <tr key={r.row}>
                       {sourceColumns.map((c) => (
-                        <td key={c}>{r.values[c]}</td>
+                        <td key={c}>{showValue(r.values[c])}</td>
                       ))}
                     </tr>
                   ))}
@@ -343,15 +445,19 @@ export function ImportWizard({ datasetId, columns, onClose, onImported }: Import
                         return (
                           <tr key={`${e.row}:${e.column}`}>
                             <td>{e.row}</td>
-                            <td>{col?.label ?? e.column}</td>
+                            <td>{col?.label ?? (e.column || 'Whole record')}</td>
                             <td>{e.reason}</td>
                             <td>
-                              <FixInput
-                                column={col}
-                                value={fixes[e.row]?.[e.column]}
-                                disabled={skipped}
-                                onChange={(value) => setFix(e.row, e.column, value)}
-                              />
+                              {col ? (
+                                <FixInput
+                                  column={col}
+                                  value={fixes[e.row]?.[e.column]}
+                                  disabled={skipped}
+                                  onChange={(value) => setFix(e.row, e.column, value)}
+                                />
+                              ) : (
+                                '—'
+                              )}
                             </td>
                             <td>
                               <input

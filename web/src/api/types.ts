@@ -86,11 +86,12 @@ export interface RowComment {
   created_at: string
 }
 
-// Mirrors backend/groundline_api/schemas/import_.py (§4, GL-2-9). Row
-// indices are 1-based over data rows only; the header row is not numbered.
+// Mirrors backend/groundline_api/schemas/import_.py (§4, GL-2-9, GL-3.5-5).
+// Row indices are 1-based over data rows only; the header row is not
+// numbered. CSV/XLSX sample values are strings; JSON/YAML ones are typed.
 export interface ImportSampleRow {
   row: number
-  values: Record<string, string>
+  values: Record<string, unknown>
 }
 
 export interface ImportValidationError {
@@ -110,6 +111,10 @@ export interface ImportPreviewResponse {
   sample_rows: ImportSampleRow[]
   total_rows: number
   validation: ImportValidationReport | null
+  // JSON/YAML only: the key the records were read from, and the other
+  // top-level keys that were ignored.
+  records_key: string | null
+  ignored_keys: string[]
 }
 
 export interface ImportCommitResponse {

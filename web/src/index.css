@@ -233,6 +233,25 @@ td.grid-cell select {
   vertical-align: -1px;
 }
 
+/* import wizard: JSON/YAML records key choice and json inline fixes (GL-3.5-6) */
+.records-key-choice {
+  display: block;
+  margin-top: 12px;
+}
+
+.json-fix {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.json-fix textarea.json-editor {
+  min-width: 240px;
+  min-height: 96px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.85em;
+}
+
 .filter-bar {
   display: flex;
   flex-direction: column;
