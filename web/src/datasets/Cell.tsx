@@ -4,8 +4,17 @@
 // construction — there is no free-text path for select/multi_select.
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import type { Column } from '../api/types'
+import { formatJson, summarizeJson } from './json'
 
 export function CellDisplay({ column, value }: { column: Column; value: unknown }) {
+  if (column.type === 'json') {
+    // One-line summary; the full value is in the tooltip and the drawer.
+    return (
+      <span className="cell-json" title={value === null || value === undefined ? undefined : formatJson(value)}>
+        {summarizeJson(value)}
+      </span>
+    )
+  }
   if (column.type === 'multi_select') {
     return <span>{Array.isArray(value) ? value.join(', ') : ''}</span>
   }

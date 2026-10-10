@@ -4,6 +4,7 @@
 import type { KeyboardEvent } from 'react'
 import type { RowPatchPayload } from '../api/client'
 import type { Column, Row } from '../api/types'
+import { formatJson } from './json'
 
 interface ConflictDialogProps {
   columns: Column[]
@@ -21,6 +22,15 @@ function describe(value: unknown): string {
   if (value === null || value === undefined) return '—'
   if (Array.isArray(value)) return value.join(', ') || '—'
   return String(value)
+}
+
+// json values are shown pretty-printed so both sides stay readable (GL-3.5-14).
+function Value({ columns, colKey, value }: { columns: Column[]; colKey: string; value: unknown }) {
+  const column = columns.find((c) => c.key === colKey)
+  if (column?.type === 'json' && value !== null && value !== undefined) {
+    return <pre className="json-view">{formatJson(value)}</pre>
+  }
+  return <>{describe(value)}</>
 }
 
 export function ConflictDialog({ columns, attempted, theirs, onTakeTheirs, onRetryMine }: ConflictDialogProps) {
@@ -47,8 +57,12 @@ export function ConflictDialog({ columns, attempted, theirs, onTakeTheirs, onRet
               Object.entries(attempted.data).map(([key, value]) => (
                 <tr key={key}>
                   <td>{labelFor(columns, key)}</td>
-                  <td>{describe(value)}</td>
-                  <td>{describe(theirs.data[key])}</td>
+                  <td>
+                    <Value columns={columns} colKey={key} value={value} />
+                  </td>
+                  <td>
+                    <Value columns={columns} colKey={key} value={theirs.data[key]} />
+                  </td>
                 </tr>
               ))}
             {attempted.status && (

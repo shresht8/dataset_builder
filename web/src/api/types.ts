@@ -12,7 +12,7 @@ export interface User {
   created_at: string
 }
 
-// The six column types (§3) — deliberately small, single source of truth
+// The column types (§3) — deliberately small, single source of truth
 // shared by API and CLI (shared/groundline_schema/column_types.py).
 export type ColumnType =
   | 'text'
@@ -21,6 +21,7 @@ export type ColumnType =
   | 'multi_select'
   | 'number'
   | 'boolean'
+  | 'json'
 
 export interface Column {
   key: string
@@ -30,6 +31,10 @@ export interface Column {
   required: boolean
   order: number
   archived: boolean
+  // `json` columns only: an optional JSON Schema their values must match.
+  json_schema: Record<string, unknown> | null
+  // The one text column whose value identifies a row (GL-3.5-12).
+  is_key: boolean
 }
 
 export interface Dataset {
