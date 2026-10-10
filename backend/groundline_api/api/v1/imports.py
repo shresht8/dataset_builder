@@ -53,7 +53,7 @@ from groundline_api.services.validation import key_column
 router = APIRouter(prefix="/datasets", tags=["import"])
 
 
-class _ImportProblem(Exception):
+class ImportProblem(Exception):
     """A 422 with an optional list of records_key candidates."""
 
     def __init__(self, detail: str, candidates: list[str] | None) -> None:
@@ -61,7 +61,7 @@ class _ImportProblem(Exception):
         self.candidates = candidates
 
 
-def _problem_response(exc: _ImportProblem) -> JSONResponse:
+def problem_response(exc: ImportProblem) -> JSONResponse:
     body: dict[str, Any] = {"detail": exc.detail}
     if exc.candidates is not None:
         body["records_key_candidates"] = exc.candidates
@@ -105,7 +105,7 @@ def _parse_json_form(raw: str | None, field: str) -> Any:
         raise HTTPException(status_code=422, detail=f"{field}: invalid JSON")
 
 
-async def _read_upload(
+async def read_upload(
     file: UploadFile, columns: list[DatasetColumn], records_key: str | None
 ) -> importer.ParsedSource:
     limit = settings.import_max_bytes
@@ -118,7 +118,7 @@ async def _read_upload(
     try:
         return importer.parse_upload(file.filename or "", content, columns, records_key)
     except importer.ImportRequestError as exc:
-        raise _ImportProblem(str(exc), exc.candidates) from exc
+        raise ImportProblem(str(exc), exc.candidates) from exc
 
 
 @router.post("/{dataset_id}/import/preview", response_model=ImportPreviewResponse)
@@ -133,9 +133,9 @@ async def preview_import(
     _get_dataset_or_404(db, dataset_id)
     columns = _columns_of(db, dataset_id)
     try:
-        source = await _read_upload(file, columns, records_key)
-    except _ImportProblem as exc:
-        return _problem_response(exc)
+        source = await read_upload(file, columns, records_key)
+    except ImportProblem as exc:
+        return problem_response(exc)
 
     parsed_mapping = _parse_json_form(mapping, "mapping")
     if parsed_mapping is not None:
@@ -173,9 +173,9 @@ async def commit_import(
     _get_dataset_or_404(db, dataset_id)
     columns = _columns_of(db, dataset_id)
     try:
-        source = await _read_upload(file, columns, records_key)
-    except _ImportProblem as exc:
-        return _problem_response(exc)
+        source = await read_upload(file, columns, records_key)
+    except ImportProblem as exc:
+        return problem_response(exc)
 
     parsed_mapping = _parse_json_form(mapping, "mapping")
     if not isinstance(parsed_mapping, dict):

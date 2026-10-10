@@ -15,6 +15,8 @@ source records onto those keys; exports and `rows pull` can nest them back.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from collections.abc import Collection
 from typing import Any
 
@@ -75,3 +77,16 @@ def nest(flat: dict[str, Any]) -> dict[str, Any]:
             raise PathError(f"path '{path}' clashes with another path")
         node[last] = value
     return nested
+
+
+def row_hash(flat: dict[str, Any], keys: Collection[str]) -> str:
+    """A row's identity for CLI sync (GL-3.5-15): sha256 of its canonical JSON.
+
+    Only `keys` (the dataset's active column keys) count, and null values are
+    dropped -- null and absent are the same thing. The CLI hashes a row as it
+    pulled it; the server hashes each pushed record. They agree for a record
+    the user didn't edit, which is how sync tells unedited rows apart.
+    """
+    canonical = {k: v for k, v in flat.items() if k in keys and v is not None}
+    text = json.dumps(canonical, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()

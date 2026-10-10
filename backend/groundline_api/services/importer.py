@@ -273,7 +273,7 @@ def _coerce_typed(value: Any, col_type: ColumnType) -> Any:
     raise _CoercionError("map this to a json column")
 
 
-def _map_row(
+def map_row(
     raw_values: dict[str, Any],
     mapping: dict[str, str],
     columns_by_key: dict[str, DatasetColumn],
@@ -350,7 +350,7 @@ def _validate_row(
 ) -> tuple[dict[str, Any], list[tuple[str, str]]]:
     if isinstance(values, RecordProblem):
         return {}, [("", values.reason)]
-    data, failures = _map_row(values, mapping, columns_by_key, structured)
+    data, failures = map_row(values, mapping, columns_by_key, structured)
     data.update(fixes)
     failed = {column for column, _ in failures}
     failures += [(k, reason) for k, reason in row_errors(data, columns) if k not in failed]
