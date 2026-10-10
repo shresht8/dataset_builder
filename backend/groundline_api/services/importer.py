@@ -32,6 +32,13 @@ validation (GL-2-8):
 An empty cell is treated as an absent value (the column's `required` check
 applies to it; it is never coerced).
 
+Dates (GL-3.5-9), every format: a `YYYY-MM-DD` string is kept; a string or
+XLSX cell with a time component is refused ("has a time component") unless
+it's an XLSX datetime at exactly midnight; XLSX time/duration cells and
+numbers are refused (a serial or epoch number is never guessed); any other
+string is left for validation to report. XLSX date cells stay native values
+(read with the workbook's own 1900/1904 epoch) instead of their str().
+
 Typed values from JSON/YAML (GL-3.5-5): strings -- and plain YAML scalars,
 by their raw text -- take the string rules above, except that a plain YAML
 scalar going to a `json` column is typed the way JSON would type it. Numbers
@@ -46,6 +53,7 @@ used in the dataset is a row error; import never updates rows (that's sync).
 from __future__ import annotations
 
 import csv
+import datetime as dt
 import io
 import re
 import zipfile
@@ -65,6 +73,7 @@ from groundline_schema.records import (
     parse_records,
     to_json_value,
 )
+from groundline_schema.temporal import is_date
 from openpyxl.utils.exceptions import InvalidFileException
 
 from groundline_api.config import settings
@@ -148,12 +157,22 @@ def _parse_xlsx(content: bytes) -> ParsedSource:
 
     def rows() -> Iterator[dict[str, Any]]:
         for raw_row in row_iter:
-            yield _cells(header, ["" if cell is None else str(cell) for cell in raw_row])
+            yield _cells(header, [_xlsx_cell(cell) for cell in raw_row])
 
     return ParsedSource(header=header, rows=rows())
 
 
-def _cells(header: list[str], raw_row: list[str]) -> dict[str, str]:
+def _xlsx_cell(cell: Any) -> Any:
+    # Date/time cells stay native so date columns can tell a date from a
+    # datetime; every other column still sees their str(), as before.
+    if cell is None:
+        return ""
+    if isinstance(cell, (dt.date, dt.time, dt.timedelta)):
+        return cell
+    return str(cell)
+
+
+def _cells(header: list[str], raw_row: list[Any]) -> dict[str, Any]:
     return {header[i]: (raw_row[i] if i < len(raw_row) else "") for i in range(len(header))}
 
 
@@ -249,8 +268,35 @@ def _coerce(raw: str, col_type: ColumnType) -> Any:
     return raw  # text / long_text / json: as-is
 
 
+_HAS_TIME = re.compile(r"\d{4}-\d{2}-\d{2}[T ]\d")
+
+
+def _coerce_date(value: Any) -> Any:
+    """Coerce one value for a date column (see the module docstring)."""
+    if isinstance(value, dt.datetime):
+        if value.time() != dt.time(0):
+            raise _CoercionError(f"{value.isoformat(sep=' ')} has a time component")
+        return value.date().isoformat()
+    if isinstance(value, dt.date):
+        return value.isoformat()
+    if isinstance(value, (dt.time, dt.timedelta)):
+        raise _CoercionError("a time is not a date")
+    if isinstance(value, (bool, int, float)):
+        raise _CoercionError(f"{value!r} is a number, not a date (write YYYY-MM-DD)")
+    if isinstance(value, str):
+        text = value.strip()
+        if is_date(text):
+            return text
+        if _HAS_TIME.match(text):
+            raise _CoercionError(f"{text!r} has a time component")
+        return str(value)  # validation names the expected YYYY-MM-DD form
+    raise _CoercionError("map this to a json column")
+
+
 def _coerce_typed(value: Any, col_type: ColumnType) -> Any:
     """Coerce one JSON/YAML value for its column (see the module docstring)."""
+    if col_type == ColumnType.DATE:
+        return _coerce_date(value)
     if col_type == ColumnType.JSON:
         try:
             return to_json_value(value)
@@ -289,9 +335,15 @@ def map_row(
         raw = raw_values.get(source_col)
         col_type = columns_by_key[schema_key].type
         if not structured:
-            if raw is None or raw.strip() == "":
+            if raw is None or (isinstance(raw, str) and raw.strip() == ""):
                 continue  # empty cell = absent
-            data[schema_key] = _coerce(raw, col_type)
+            try:
+                if col_type == ColumnType.DATE:
+                    data[schema_key] = _coerce_date(raw)
+                else:  # an XLSX date cell outside a date column: its str(), as before
+                    data[schema_key] = _coerce(raw if isinstance(raw, str) else str(raw), col_type)
+            except _CoercionError as exc:
+                failures.append((schema_key, str(exc)))
             continue
         if raw is None:
             continue  # null / missing = absent
@@ -351,7 +403,15 @@ def _validate_row(
     if isinstance(values, RecordProblem):
         return {}, [("", values.reason)]
     data, failures = map_row(values, mapping, columns_by_key, structured)
-    data.update(fixes)
+    for key, value in fixes.items():
+        # A fix replaces the source value, so its coercion failure no longer applies;
+        # date fixes take the same date rules as the source.
+        failures = [(k, reason) for k, reason in failures if k != key]
+        column = columns_by_key.get(key)
+        try:
+            data[key] = _coerce_date(value) if column and column.type == ColumnType.DATE and value is not None else value
+        except _CoercionError as exc:
+            failures.append((key, str(exc)))
     failed = {column for column, _ in failures}
     failures += [(k, reason) for k, reason in row_errors(data, columns) if k not in failed]
     failures += keys.failures(index, data)
