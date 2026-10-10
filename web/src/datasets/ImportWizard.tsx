@@ -17,6 +17,7 @@
 import { useState, type KeyboardEvent } from 'react'
 import { ApiError, commitImport, previewImport } from '../api/client'
 import type { Column, ImportPreviewResponse, ImportSampleRow, ImportValidationError } from '../api/types'
+import { DateInput } from './Cell'
 import { formatJson, parseJsonText, summarizeJson } from './json'
 
 const ACCEPTED = '.csv,.xlsx,.json,.jsonl,.ndjson,.yaml,.yml'
@@ -122,6 +123,10 @@ function FixInput({
   }
   if (column?.type === 'json') {
     return <JsonFixInput value={value} disabled={disabled} onChange={onChange} />
+  }
+  if (column?.type === 'date') {
+    // Same editor as the grid; the API applies the same date rules to fixes.
+    return <DateInput value={typeof value === 'string' ? value : ''} disabled={disabled} onChange={onChange} />
   }
   if (column?.type === 'multi_select') {
     const selected = Array.isArray(value) ? (value as string[]) : []

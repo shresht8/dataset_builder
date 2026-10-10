@@ -22,6 +22,7 @@ export type ColumnType =
   | 'number'
   | 'boolean'
   | 'json'
+  | 'date'
 
 export interface Column {
   key: string

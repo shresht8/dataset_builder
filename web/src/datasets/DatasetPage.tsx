@@ -20,6 +20,7 @@ import type { Column, Role, Row, User } from '../api/types'
 import { useAuth } from '../auth/AuthContext'
 import { CellDisplay, CellEditor, MultiSelectEditor } from './Cell'
 import { CommentsPanel } from './CommentsPanel'
+import { DATE_HINT, isDate } from './dates'
 import { ConflictDialog } from './ConflictDialog'
 import { DetailDrawer } from './DetailDrawer'
 import { FilterBar } from './FilterBar'
@@ -349,10 +350,19 @@ export function DatasetPage() {
     setEditingCell(coord)
   }
 
-  function commitEdit() {
-    if (!editingCell) return
-    saveCell(editingCell, draft)
+  // Returns false when the draft is refused (an invalid date stays in edit
+  // mode with an inline error instead of being saved).
+  function commitEdit(): boolean {
+    if (!editingCell) return false
+    const column = columnsByKey.get(editingCell.colKey)
+    if (column?.type === 'date' && typeof draft === 'string' && draft.trim() !== '' && !isDate(draft.trim())) {
+      setCellError(editingCell, DATE_HINT)
+      return false
+    }
+    setCellError(editingCell, null)
+    saveCell(editingCell, column?.type === 'date' && typeof draft === 'string' ? draft.trim() : draft)
     setEditingCell(null)
+    return true
   }
 
   function toggleBoolean(coord: CellCoord) {
@@ -445,11 +455,11 @@ export function DatasetPage() {
         commitEdit()
       } else if (event.key === 'Escape') {
         event.preventDefault()
+        setCellError(editingCell, null)
         setEditingCell(null)
       } else if (event.key === 'Tab') {
         event.preventDefault()
-        commitEdit()
-        moveActive(0, event.shiftKey ? -1 : 1)
+        if (commitEdit()) moveActive(0, event.shiftKey ? -1 : 1)
       }
       return
     }

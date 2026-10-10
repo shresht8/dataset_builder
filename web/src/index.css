@@ -233,6 +233,27 @@ td.grid-cell select {
   vertical-align: -1px;
 }
 
+/* date cells (GL-3.5-10): typed YYYY-MM-DD plus the native picker */
+.date-input {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
+td.grid-cell .date-input input[type='text'] {
+  min-width: 7.5em;
+}
+
+/* Only the picker's calendar button shows; the typed field is the text input. */
+.date-input input[type='date'] {
+  width: 2em;
+  padding: 0;
+}
+
+.date-input input[type='date']::-webkit-datetime-edit {
+  display: none;
+}
+
 /* import wizard: JSON/YAML records key choice and json inline fixes (GL-3.5-6) */
 .records-key-choice {
   display: block;
