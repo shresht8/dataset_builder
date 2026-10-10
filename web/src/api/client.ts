@@ -2,6 +2,8 @@
 // credentials so the signed session cookie (GL-1-9) round-trips; the Vite dev
 // server proxies /v1 to the backend so this works same-origin in dev.
 import type {
+  ApiToken,
+  ApiTokenCreated,
   Dataset,
   ImportCommitResponse,
   ImportPreviewResponse,
@@ -220,4 +222,21 @@ export function commitImport(
   if (Object.keys(fixes).length > 0) form.append('fixes', JSON.stringify(fixes))
   if (recordsKey) form.append('records_key', recordsKey)
   return apiFetchForm<ImportCommitResponse>(`/datasets/${datasetId}/import`, form)
+}
+
+// Personal access tokens (GL-1-10, page GL-3.5-19). A token acts as the user
+// who created it; the raw value is only returned by createToken.
+export function listTokens(): Promise<ApiToken[]> {
+  return apiFetch<ApiToken[]>('/auth/tokens')
+}
+
+export function createToken(name: string, ttlDays: number): Promise<ApiTokenCreated> {
+  return apiFetch<ApiTokenCreated>('/auth/tokens', {
+    method: 'POST',
+    body: JSON.stringify({ name, ttl_days: ttlDays }),
+  })
+}
+
+export function revokeToken(tokenId: string): Promise<void> {
+  return apiFetch<void>(`/auth/tokens/${tokenId}`, { method: 'DELETE' })
 }

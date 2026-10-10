@@ -540,3 +540,43 @@ button.danger-link {
   gap: 4px;
   margin: 8px 0;
 }
+
+/* API tokens page (GL-3.5-19) */
+.tokens-page form {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  margin: 12px 0;
+}
+
+.tokens-page form label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.token-secret {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.token-secret code,
+.cli-snippet {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.85em;
+  word-break: break-all;
+}
+
+.cli-snippet {
+  white-space: pre-wrap;
+  padding: 8px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+}
+
+.token-status-revoked,
+.token-status-expired {
+  opacity: 0.6;
+}

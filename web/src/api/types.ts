@@ -136,3 +136,16 @@ export interface VersionRead {
   created_by_email: string | null
   created_at: string
 }
+
+// Mirrors backend/groundline_api/api/v1/auth.py TokenRead / TokenCreated
+// (GL-1-10). The raw token is only ever returned once, on creation.
+export interface ApiToken {
+  id: string
+  name: string
+  expires_at: string
+  revoked_at: string | null
+}
+
+export interface ApiTokenCreated extends ApiToken {
+  token: string
+}
