@@ -1,0 +1,120 @@
+# Synthetic eval suite for the Phase 3.5 tests (dummy data only).
+#
+# It mirrors the features of a real-world eval file without copying one:
+# anchors defined outside the records list, extra top-level keys, nested
+# objects, a list of {name, args} objects (including empty args), folded
+# block scalars, booleans, numbers, a field that is null in every record,
+# and optional fields that appear in only some records.
+
+as_of: &as_of '2099-03-31'
+period_start: &period_start '2099-01-01'
+prior_period_end: &prior_end '2098-12-31'
+suite_owner: evals-team
+
+cases:
+  # One call, date-range args, text + table answer.
+  - id: case-weather-01
+    prompt: What is the forecast for the next three days?
+    title: Three-day forecast
+    topic: weather
+    step: 1
+    thread_id: null
+    expected:
+      routes:
+        - weather
+      tools:
+        - get_forecast
+      calls:
+        - name: get_forecast
+          args:
+            city: Lisbon
+            from_date: *period_start
+            to_date: *as_of
+      answer: >
+        Placeholder answer describing a three-day forecast.
+        No real data here.
+      has_text: true
+      has_table: true
+      match_mode: any
+
+  # Several calls, all with empty args.
+  - id: case-orders-01
+    prompt: Which orders are late and who should be told?
+    title: Late orders
+    topic: orders
+    step: 1
+    thread_id: null
+    expected:
+      routes:
+        - orders
+      tools:
+        - list_late_orders
+        - get_contacts
+        - get_policy
+      calls:
+        - name: list_late_orders
+          args: {}
+        - name: get_contacts
+          args: {}
+        - name: get_policy
+          args: {}
+      answer: >
+        Placeholder answer listing late orders and contacts.
+      has_text: true
+      has_table: true
+
+  # Richer args (numbers, booleans, enum-like strings); two routes.
+  - id: case-sales-01
+    prompt: What sold best this quarter, and how did costs move each month?
+    title: Sales and costs
+    topic: sales and costs
+    step: 2
+    thread_id: null
+    expected:
+      routes:
+        - sales
+        - costs
+      tools:
+        - top_items
+        - cost_report
+      calls:
+        - name: top_items
+          args:
+            from_date: *period_start
+            to_date: *as_of
+            sort_by: both
+            limit: 5
+        - name: cost_report
+          args:
+            from_date: *period_start
+            to_date: *as_of
+            include_children: true
+            breakdown: MONTH
+      answer: >
+        Placeholder answer covering both questions in one response.
+      has_text: true
+      has_table: true
+
+  # A literal (quoted) date instead of an alias; text-only answer;
+  # optional flags that only this record has.
+  - id: case-balance-01
+    prompt: What was the balance at the end of last year?
+    title: Year-end balance
+    topic: balance
+    step: 1
+    thread_id: null
+    expected:
+      routes:
+        - balance
+      tools:
+        - get_balance
+      calls:
+        - name: get_balance
+          args:
+            as_at_date: '2098-12-31'
+            compare_to_date: *prior_end
+      answer: >
+        Placeholder answer quoting a balance of 0.00.
+      has_text: true
+      has_table: false
+      follow_up: true

@@ -9,7 +9,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 
 from groundline_api.models.row import RowStatus
 
@@ -58,3 +58,16 @@ class RowEditRead(BaseModel):
     at: datetime
 
 # TODO GL-1-5+: RowsFromTraces
+
+
+class RowsDelete(BaseModel):
+    """Bulk soft delete (GL-3.5-18): exactly one of `ids` or `keys`."""
+
+    ids: list[uuid.UUID] | None = None
+    keys: list[str] | None = None
+
+    @model_validator(mode="after")
+    def _one_selector(self) -> RowsDelete:
+        if (self.ids is None) == (self.keys is None):
+            raise ValueError("give exactly one of 'ids' or 'keys'")
+        return self

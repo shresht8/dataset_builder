@@ -3,8 +3,8 @@
     GET  /datasets/{id}/versions
     POST /datasets/{id}/versions              cut
     GET  /datasets/{id}/versions/{v}/manifest
-    GET  /datasets/{id}/versions/{v}/jsonschema
-    GET  /datasets/{id}/versions/{v}?format=jsonl|json|yaml
+    GET  /datasets/{id}/versions/{v}/jsonschema?shape=flat|nested
+    GET  /datasets/{id}/versions/{v}?format=jsonl|json|yaml&shape=flat|nested
     GET  /datasets/{id}/versions/diff?from=&to=
 """
 
@@ -30,6 +30,12 @@ from groundline_api.services import export, storage
 from groundline_api.services.versioning import EmptySelectionError, cut_version
 
 router = APIRouter(prefix="/datasets", tags=["versions"])
+
+_MEDIA_TYPES = {
+    "jsonl": "application/x-ndjson",
+    "json": "application/json",
+    "yaml": "application/yaml",
+}
 
 
 def _get_dataset_or_404(db: Session, dataset_id: uuid.UUID) -> Dataset:
@@ -156,11 +162,12 @@ def get_jsonschema(
     v: int,
     db: Annotated[Session, Depends(get_db)],
     _user: Annotated[User, Depends(require_role(Role.VIEWER))],
+    shape: Literal["flat", "nested"] = Query("flat"),
 ) -> Response:
     _get_dataset_or_404(db, dataset_id)
     version = _get_version_or_404(db, dataset_id, v)
     columns = [Column(**c) for c in version.schema_snapshot["columns"]]
-    schema = export.sidecar_schema(columns)
+    schema = export.sidecar_schema(columns, shape)
     return Response(
         content=json.dumps(schema).encode("utf-8"), media_type="application/schema+json"
     )
@@ -173,17 +180,22 @@ def export_version(
     db: Annotated[Session, Depends(get_db)],
     _user: Annotated[User, Depends(require_role(Role.VIEWER))],
     format: Literal["jsonl", "json", "yaml"] = Query("jsonl"),
+    shape: Literal["flat", "nested"] = Query("flat"),
 ) -> Response:
-    """Export a version's rows (C3). Always reads from object storage."""
+    """Export a version's rows (C3). Always reads from object storage.
+
+    `nested` re-nests each line's `data` from its dotted keys; it is a
+    rendering of the same stored bytes, so `content_hash` is unchanged.
+    """
     dataset = _get_dataset_or_404(db, dataset_id)
     _get_version_or_404(db, dataset_id, v)
     prefix = f"datasets/{dataset.name}/v{v}/"
     rows_bytes = storage.get_object(settings.storage_bucket, prefix + "rows.jsonl")
-    if format == "jsonl":
+    if format == "jsonl" and shape == "flat":
         return Response(content=rows_bytes, media_type="application/x-ndjson")
 
     manifest = json.loads(storage.get_object(settings.storage_bucket, prefix + "manifest.json"))
-    rows = export.parse_rows_jsonl(rows_bytes)
-    if format == "json":
-        return Response(content=export.export_json(manifest, rows), media_type="application/json")
-    return Response(content=export.export_yaml(manifest, rows), media_type="application/yaml")
+    return Response(
+        content=export.render(rows_bytes, manifest, format, shape),
+        media_type=_MEDIA_TYPES[format],
+    )

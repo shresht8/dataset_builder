@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import re
+from pathlib import Path
 
 import typer
 
 from groundline_cli.client import ApiClient, ApiError
+from groundline_cli.commands._run import api, fail
 from groundline_cli.config import ConfigError, load_config
+from groundline_cli.schemafile import SchemaFileError, load_schema_file
 
-app = typer.Typer(help="Inspect datasets")
+app = typer.Typer(help="List, create and diff datasets")
 
 _VERSION_PATTERN = re.compile(r"^v(\d+)$")
 
@@ -98,6 +101,44 @@ def _render_diff(result: dict) -> None:
             typer.echo(f"  removed: {', '.join(schema_changes['removed'])}")
         if schema_changes["changed"]:
             typer.echo(f"  changed: {', '.join(schema_changes['changed'])}")
+
+
+@app.command("create")
+def create(
+    name: str,
+    schema: str = typer.Option(..., "--schema", help="schema file (see `schema infer`)"),
+    description: str = typer.Option(None, "--description"),
+) -> None:
+    """Create a dataset and set its schema from a schema file."""
+    try:
+        columns = load_schema_file(Path(schema))
+    except SchemaFileError as exc:
+        fail(str(exc))
+    with api() as client:
+        dataset = client.create_dataset(name, description)
+        try:
+            client.put_schema(dataset["id"], columns)
+        except ApiError as exc:
+            fail(
+                f"dataset '{name}' was created without a schema: {exc}\n"
+                f"fix {schema}, then run: groundline schema push {name} {schema}"
+            )
+    typer.echo(f"created {name} with {len(columns)} columns")
+
+
+@app.command("delete")
+def delete(
+    name: str,
+    yes: bool = typer.Option(False, "--yes", help="don't ask for confirmation"),
+) -> None:
+    """Delete a dataset that has no versions (its name becomes free again)."""
+    if not yes:
+        typed = typer.prompt(f"Type the dataset name to delete it ({name})")
+        if typed != name:
+            fail("name didn't match; nothing deleted")
+    with api() as client:
+        client.delete_dataset(client.resolve_dataset_id(name))
+    typer.echo(f"deleted {name}")
 
 
 @app.command()

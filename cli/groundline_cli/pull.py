@@ -2,15 +2,17 @@
 
 `pull_version` is the shared core for `groundline pull <name>@vN` and, from
 GL-3-8, `groundline pull --lock`. It always fetches the `jsonl` bytes first
-and verifies `content_hash` (C3) before writing anything to disk, even when
-the requested format is json/yaml — so a hash mismatch never leaves a
-half-written or unverified data file behind.
+and verifies `content_hash` (C3) before writing anything to disk. json, yaml
+and the `nested` shape are then rendered locally from those verified bytes
+with the API's own renderer (GL-3.5-13), so every file written is covered by
+the hash check and a hash mismatch never leaves a half-written or unverified
+data file behind.
 
 Output layout, chosen for this card::
 
     <out>/<name>/v<N>/rows.<fmt>
     <out>/<name>/v<N>/manifest.json
-    <out>/<name>/v<N>/<name>.schema.json     # JSON Schema sidecar
+    <out>/<name>/v<N>/<name>.schema.json     # JSON Schema sidecar (in `shape`)
 """
 
 from __future__ import annotations
@@ -19,6 +21,8 @@ import hashlib
 import json
 import re
 from pathlib import Path
+
+from groundline_schema.render import render
 
 from groundline_cli.client import ApiClient, ApiError
 
@@ -37,7 +41,9 @@ def parse_target(target: str) -> tuple[str, int]:
     return match.group("name"), int(match.group("version"))
 
 
-def pull_version(client: ApiClient, name: str, version: int, fmt: str, out: Path) -> str:
+def pull_version(
+    client: ApiClient, name: str, version: int, fmt: str, out: Path, shape: str = "flat"
+) -> str:
     """Fetch, verify, and write one dataset version. Returns the verified content_hash."""
     dataset_id = client.resolve_dataset_id(name)
 
@@ -51,10 +57,8 @@ def pull_version(client: ApiClient, name: str, version: int, fmt: str, out: Path
             f"expected {expected_hash}, got {actual_hash}"
         )
 
-    data_bytes = (
-        jsonl_bytes if fmt == "jsonl" else client.get_version_bytes(dataset_id, version, fmt)
-    )
-    sidecar = client.get_jsonschema(dataset_id, version)
+    data_bytes = render(jsonl_bytes, manifest, fmt, shape)
+    sidecar = client.get_jsonschema(dataset_id, version, shape)
 
     version_dir = out / name / f"v{version}"
     version_dir.mkdir(parents=True, exist_ok=True)

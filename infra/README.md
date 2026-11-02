@@ -210,6 +210,9 @@ All settings are environment variables read by `backend/groundline_api/config.py
 | `APP_SECRET_KEY` | `change-me` | Signs session cookies. **Secret — generate a random value for any non-local deploy.** |
 | `BOOTSTRAP_ADMIN_EMAIL` | `""` (compose default: `admin@example.com`) | If set, the API creates/promotes this admin at startup (idempotent, GL-1-8). |
 | `PAT_DEFAULT_TTL_DAYS` | `90` | Default personal-access-token lifetime. |
+| `IMPORT_MAX_BYTES` | `52428800` (50 MB) | Largest file accepted by import and CLI `rows push`, every format; bigger uploads get 413 (GL-3.5-5). |
+| `IMPORT_MAX_NODES` | `1000000` | Cap on values in a YAML file after expanding anchors/aliases; protects against "alias bombs" (422). |
+| `JSON_CELL_MAX_BYTES` | `262144` (256 KB) | Largest serialised value for one `json` cell (422); big blobs make the grid unusable (GL-3.5-13). |
 | `AUTH_SSO_ENABLED` | `false` | Turns on Entra/OIDC sign-in (GL-3-11). Dev login and PATs keep working alongside it. |
 | `OIDC_DISCOVERY_URL` | empty → derived from `ENTRA_TENANT_ID` (compose default: the mock, **mock-only**) | OIDC discovery document. Leave empty for real Entra. |
 | `ENTRA_TENANT_ID` | empty | Real Entra tenant (used to derive the discovery URL). |

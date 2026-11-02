@@ -177,6 +177,102 @@ td.grid-cell select {
   padding: 8px;
 }
 
+/* json columns (GL-3.5-14): one-line summary in the grid, pretty JSON in the drawer */
+.cell-json {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.85em;
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.drawer-field textarea.json-editor {
+  min-height: 240px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.85em;
+  white-space: pre;
+  tab-size: 2;
+}
+
+.json-view {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.85em;
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 4px 0 0;
+}
+
+.json-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.hint-inline {
+  font-size: 0.8em;
+  opacity: 0.7;
+}
+
+.field-error,
+.cell-error {
+  color: #c0392b;
+  font-size: 0.85em;
+  margin: 0;
+}
+
+@media (prefers-color-scheme: dark) {
+  .field-error,
+  .cell-error {
+    color: #f87171;
+  }
+}
+
+.key-icon {
+  margin-right: 4px;
+  vertical-align: -1px;
+}
+
+/* date cells (GL-3.5-10): typed YYYY-MM-DD plus the native picker */
+.date-input {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
+td.grid-cell .date-input input[type='text'] {
+  min-width: 7.5em;
+}
+
+/* Only the picker's calendar button shows; the typed field is the text input. */
+.date-input input[type='date'] {
+  width: 2em;
+  padding: 0;
+}
+
+.date-input input[type='date']::-webkit-datetime-edit {
+  display: none;
+}
+
+/* import wizard: JSON/YAML records key choice and json inline fixes (GL-3.5-6) */
+.records-key-choice {
+  display: block;
+  margin-top: 12px;
+}
+
+.json-fix {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.json-fix textarea.json-editor {
+  min-width: 240px;
+  min-height: 96px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.85em;
+}
+
 .filter-bar {
   display: flex;
   flex-direction: column;
@@ -411,4 +507,76 @@ td.grid-cell select {
 .version-hash {
   font-family: ui-monospace, monospace;
   cursor: help;
+}
+
+/* destructive actions (GL-3.5-18) */
+button.danger {
+  background: #b91c1c;
+  color: #fff;
+}
+
+button.danger:disabled {
+  opacity: 0.5;
+}
+
+button.danger-link {
+  margin-left: 6px;
+  background: none;
+  border: none;
+  color: #c0392b;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+@media (prefers-color-scheme: dark) {
+  button.danger-link {
+    color: #f87171;
+  }
+}
+
+.confirm-name {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 8px 0;
+}
+
+/* API tokens page (GL-3.5-19) */
+.tokens-page form {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  margin: 12px 0;
+}
+
+.tokens-page form label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.token-secret {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.token-secret code,
+.cli-snippet {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.85em;
+  word-break: break-all;
+}
+
+.cli-snippet {
+  white-space: pre-wrap;
+  padding: 8px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+}
+
+.token-status-revoked,
+.token-status-expired {
+  opacity: 0.6;
 }

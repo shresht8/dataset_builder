@@ -1,4 +1,4 @@
-"""The six column types and the column definition model (§3).
+"""The eight column types and the column definition model (§3).
 
 The type set is deliberately small; see the design doc for why. This module is
 the single source of truth for what a column is, shared by API and CLI.
@@ -18,12 +18,16 @@ class ColumnType(str, Enum):
     MULTI_SELECT = "multi_select"
     NUMBER = "number"
     BOOLEAN = "boolean"
+    JSON = "json"
+    DATE = "date"
 
 
 class Column(BaseModel):
     """A single column in a dataset schema.
 
     `options` is required for `select` / `multi_select` and ignored otherwise.
+    `json_schema` optionally constrains a `json` column's values (GL-3.5-12).
+    `is_key` marks the one text column whose value identifies a row.
     `archived` columns are retired but preserved in old version snapshots.
     """
 
@@ -34,3 +38,5 @@ class Column(BaseModel):
     required: bool = False
     order: int = 0
     archived: bool = False
+    json_schema: dict | None = None
+    is_key: bool = False

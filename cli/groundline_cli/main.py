@@ -1,9 +1,15 @@
 """CLI entrypoint (§7).
 
     groundline datasets list
-    groundline pull claims-eligibility@v3 --format yaml -o ./evals/
+    groundline pull claims-eligibility@v3 --format yaml --shape nested -o ./evals/
     groundline pull --lock
     groundline datasets diff claims-eligibility v3 v4
+
+    groundline schema infer questions.yaml --key id -o questions.schema.yaml
+    groundline datasets create questions --schema questions.schema.yaml
+    groundline rows push questions questions.yaml
+    groundline rows pull questions -o questions.yaml --records-key questions
+    groundline schema pull questions / schema push questions questions.schema.yaml
 """
 
 from __future__ import annotations
@@ -11,9 +17,12 @@ from __future__ import annotations
 from pathlib import Path
 
 import typer
+from groundline_schema.render import FORMATS, SHAPES
 
 from groundline_cli.client import ApiClient, ApiError
 from groundline_cli.commands import datasets as datasets_cmd
+from groundline_cli.commands import rows as rows_cmd
+from groundline_cli.commands import schema as schema_cmd
 from groundline_cli.config import ConfigError, load_config
 from groundline_cli.lock import LockError, restore_lock, update_lock
 from groundline_cli.pull import (
@@ -25,15 +34,22 @@ from groundline_cli.pull import (
 
 app = typer.Typer(help="Groundline dataset builder CLI")
 app.add_typer(datasets_cmd.app, name="datasets")
-
-_FORMATS = ("jsonl", "json", "yaml")
+app.add_typer(schema_cmd.app, name="schema")
+app.add_typer(rows_cmd.app, name="rows")
 
 
 @app.command()
 def pull(
     target: str = typer.Argument(None, help="name@vN; omit with --lock"),
     lock: bool = typer.Option(False, "--lock", help="restore everything in groundline.lock"),
-    format: str = typer.Option("jsonl", help="jsonl|json|yaml"),
+    format: str = typer.Option(
+        None, help="jsonl|json|yaml (default jsonl; with --lock, the pinned format)"
+    ),
+    shape: str = typer.Option(
+        None,
+        help="flat|nested: nested re-nests dotted column keys "
+        "(default flat; with --lock, the pinned shape)",
+    ),
     out: str = typer.Option(".", "-o", "--out", help="output directory"),
     lock_file: str = typer.Option(
         "groundline.lock", "--lock-file", help="path to the lock file"
@@ -46,8 +62,11 @@ def pull(
     if not lock and target is None:
         typer.echo("pull requires name@vN, or --lock", err=True)
         raise typer.Exit(code=1)
-    if format not in _FORMATS:
-        typer.echo(f"invalid --format '{format}': expected one of {_FORMATS}", err=True)
+    if format is not None and format not in FORMATS:
+        typer.echo(f"invalid --format '{format}': expected one of {FORMATS}", err=True)
+        raise typer.Exit(code=1)
+    if shape is not None and shape not in SHAPES:
+        typer.echo(f"invalid --shape '{shape}': expected one of {SHAPES}", err=True)
         raise typer.Exit(code=1)
 
     try:
@@ -59,7 +78,7 @@ def pull(
     if lock:
         with ApiClient(config) as client:
             try:
-                restored = restore_lock(client, Path(lock_file), format, Path(out))
+                restored = restore_lock(client, Path(lock_file), format, Path(out), shape)
             except (ApiError, HashMismatchError, LockError) as exc:
                 typer.echo(str(exc), err=True)
                 raise typer.Exit(code=1) from exc
@@ -74,9 +93,11 @@ def pull(
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1) from exc
 
+    fmt = format or "jsonl"
+    shape = shape or "flat"
     with ApiClient(config) as client:
         try:
-            content_hash = pull_version(client, name, version, format, Path(out))
+            content_hash = pull_version(client, name, version, fmt, Path(out), shape)
             missing = check_drift(client, name, version)
         except ApiError as exc:
             typer.echo(str(exc), err=True)
@@ -93,7 +114,7 @@ def pull(
             "version: " + ", ".join(missing),
             err=True,
         )
-    update_lock(Path(lock_file), name, version, content_hash)
+    update_lock(Path(lock_file), name, version, content_hash, fmt, shape)
 
 
 if __name__ == "__main__":

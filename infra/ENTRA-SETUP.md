@@ -33,6 +33,11 @@ New registration**.
    `openid`, `profile` and `email` scopes need no extra consent.
 8. Record the **Directory (tenant) ID** and **Application (client) ID** from
    the Overview page.
+9. **Restrict who can sign in.** Go to **Enterprise applications → Groundline →
+   Properties**, set **Assignment required?** to **Yes**, then under **Users and
+   groups** assign the groups you map in §2. Without this, *any* user in the
+   tenant can sign in and gets the `default` role. The default is viewer,
+   which can read and export every dataset.
 
 ## 2. Groups → roles
 

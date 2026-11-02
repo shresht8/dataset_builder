@@ -3,53 +3,27 @@
 JSON Schema is generated from the version's embedded column schema via
 `groundline_schema.jsonschema.build_json_schema`. All three formats carry the
 same content; jsonl is the raw stored bytes, json/yaml wrap the parsed lines
-with the stored manifest (C3).
+with the stored manifest (C3). Rendering lives in `groundline_schema.render`
+so the CLI produces byte-identical files from verified jsonl (GL-3.5-13); the
+`nested` shape nests each line's `data` from its dotted keys.
 """
 
 from __future__ import annotations
 
-import json
-
-import yaml
 from groundline_schema import Column
-from groundline_schema.jsonschema import build_json_schema
+from groundline_schema.jsonschema import build_json_schema, nest_json_schema
+from groundline_schema.render import parse_rows_jsonl, render
 
 from groundline_api.models.row import RowStatus
 
-
-class _BlockStyleDumper(yaml.SafeDumper):
-    """Emits multi-line strings as block scalars (`|`), per §7."""
+__all__ = ["parse_rows_jsonl", "render", "sidecar_schema"]
 
 
-def _represent_str(dumper: yaml.SafeDumper, data: str) -> yaml.ScalarNode:
-    style = "|" if "\n" in data else None
-    return dumper.represent_scalar("tag:yaml.org,2002:str", data, style=style)
-
-
-_BlockStyleDumper.add_representer(str, _represent_str)
-
-
-def parse_rows_jsonl(rows_bytes: bytes) -> list[dict]:
-    """Parse stored `rows.jsonl` bytes into line objects (C2 line shape)."""
-    text = rows_bytes.decode("utf-8")
-    return [json.loads(line) for line in text.splitlines() if line]
-
-
-def export_json(manifest: dict, rows: list[dict]) -> bytes:
-    payload = {"manifest": manifest, "rows": rows}
-    return json.dumps(payload, ensure_ascii=False).encode("utf-8")
-
-
-def export_yaml(manifest: dict, rows: list[dict]) -> bytes:
-    payload = {"manifest": manifest, "rows": rows}
-    return yaml.dump(
-        payload, Dumper=_BlockStyleDumper, allow_unicode=True, sort_keys=False
-    ).encode("utf-8")
-
-
-def sidecar_schema(columns: list[Column]) -> dict:
+def sidecar_schema(columns: list[Column], shape: str = "flat") -> dict:
     """The JSON Schema sidecar for one snapshot line: id, status, data (C3)."""
     data_schema = build_json_schema(columns)
+    if shape == "nested":
+        data_schema = nest_json_schema(data_schema)
     # In 2020-12, `$schema` belongs only at a schema resource's root; the
     # embedded `data` schema must not repeat it.
     data_schema.pop("$schema", None)

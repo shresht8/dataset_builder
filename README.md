@@ -9,7 +9,7 @@ design doc: [docs/groundline-dataset-builder.md](docs/groundline-dataset-builder
 |---|---|---|
 | [`shared/`](shared/) | `groundline_schema` — column types, manifest, JSON Schema sidecar (single source of truth shared by API and CLI) | §3, §7 |
 | [`backend/`](backend/) | `groundline_api` — FastAPI service: data model, annotation API, Entra OIDC auth, versioning, import/export | §3–§8 |
-| [`cli/`](cli/) | `groundline` — developer CLI: `list`, `pull`, `diff`, lock file | §7 |
+| [`cli/`](cli/) | `groundline` — developer CLI: `datasets list/create/delete/diff`, `pull` + lock file, `schema infer/pull/push`, `rows pull/push/delete` (run `groundline --help`) | §4, §7 |
 | [`backend/migrations/`](backend/migrations/) | Alembic migrations for the data model | §3 |
 | [`web/`](web/) | React + TypeScript annotation UI (Vite): dev login, typed grid, filters, import | §4 |
 | [`infra/`](infra/) | Local dev services (Postgres, object storage) | — |

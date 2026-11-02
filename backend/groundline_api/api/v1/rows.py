@@ -5,29 +5,46 @@
     PATCH /datasets/{id}/rows/{rid}   If-Match: <rev>   data/status/assignee (§4, §8)
     GET/POST /datasets/{id}/rows/{rid}/comments   row comment thread (§4, GL-2-4)
     GET   /datasets/{id}/rows/{rid}/edits         append-only edit history (§3, GL-2-4)
+    DELETE /datasets/{id}/rows/{rid}  If-Match: <rev>   soft delete (editor+, GL-3.5-18)
+    POST  /datasets/{id}/rows/delete  {"ids": [...]} | {"keys": [...]}   bulk soft delete
+
+When the dataset has a key column, create/patch keep `row_key` in sync with
+its value; a value another row already uses is a 409, and changing an
+existing row's key value needs editor+ (GL-3.5-13).
+
+A deleted row keeps its data and audit trail but is gone everywhere: lists,
+patch/comments/edits (404), version cuts, key uniqueness, import and sync.
 """
 
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timezone
 from typing import Annotated, Any
 
 import sqlalchemy as sa
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Response
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from groundline_schema import ColumnType
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from groundline_api.deps import get_db, require_role
+from groundline_api.deps import get_db, has_role, require_role
 from groundline_api.models.comment import RowComment
 from groundline_api.models.dataset import Dataset, DatasetColumn
 from groundline_api.models.row import DatasetRow, RowEdit, RowStatus
 from groundline_api.models.user import Role, User
 from groundline_api.schemas.comment import CommentCreate, CommentRead
-from groundline_api.schemas.row import RowCreate, RowEditRead, RowPatch, RowRead
-from groundline_api.services.validation import validate_row_data
+from groundline_api.schemas.row import (
+    RowCreate,
+    RowEditRead,
+    RowPatch,
+    RowRead,
+    RowsDelete,
+)
+from groundline_api.services.validation import key_column, validate_row_data
 
 router = APIRouter(prefix="/datasets", tags=["rows"])
 
@@ -49,6 +66,33 @@ def _columns_of(db: Session, dataset_id: uuid.UUID) -> list[DatasetColumn]:
     )
 
 
+def _ensure_key_free(
+    db: Session, dataset_id: uuid.UUID, value: str, row_id: uuid.UUID | None = None
+) -> None:
+    """409 if another live row of the dataset already uses this key value."""
+    stmt = select(DatasetRow.id).where(
+        DatasetRow.dataset_id == dataset_id,
+        DatasetRow.row_key == value,
+        DatasetRow.deleted_at.is_(None),
+    )
+    if row_id is not None:
+        stmt = stmt.where(DatasetRow.id != row_id)
+    other = db.scalar(stmt)
+    if other is not None:
+        raise HTTPException(status_code=409, detail=f"key '{value}' already exists (row {other})")
+
+
+def _commit_keyed(db: Session, value: str | None) -> None:
+    """Commit; a concurrent writer taking the same key surfaces as a 409."""
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        if value is None:
+            raise
+        raise HTTPException(status_code=409, detail=f"key '{value}' already exists") from None
+
+
 @router.get("/{dataset_id}/rows", response_model=list[RowRead])
 def list_rows(
     dataset_id: uuid.UUID,
@@ -59,7 +103,9 @@ def list_rows(
     q: str | None = None,
 ) -> list[DatasetRow]:
     _get_dataset_or_404(db, dataset_id)
-    stmt = select(DatasetRow).where(DatasetRow.dataset_id == dataset_id)
+    stmt = select(DatasetRow).where(
+        DatasetRow.dataset_id == dataset_id, DatasetRow.deleted_at.is_(None)
+    )
     if status is not None:
         stmt = stmt.where(DatasetRow.status == status)
     if assignee is not None:
@@ -93,19 +139,91 @@ def create_row(
     user: Annotated[User, Depends(require_role(Role.ANNOTATOR))],
 ) -> DatasetRow:
     _get_dataset_or_404(db, dataset_id)
-    validate_row_data(payload.data, _columns_of(db, dataset_id))
-    row = DatasetRow(dataset_id=dataset_id, data=payload.data, updated_by=user.id)
+    columns = _columns_of(db, dataset_id)
+    validate_row_data(payload.data, columns)
+    key_col = key_column(columns)
+    row_key = payload.data[key_col.key] if key_col is not None else None
+    if row_key is not None:
+        _ensure_key_free(db, dataset_id, row_key)
+    row = DatasetRow(
+        dataset_id=dataset_id, data=payload.data, updated_by=user.id, row_key=row_key
+    )
     db.add(row)
-    db.commit()
+    _commit_keyed(db, row_key)
     db.refresh(row)
     return row
 
 
 def _get_row_or_404(db: Session, dataset_id: uuid.UUID, row_id: uuid.UUID) -> DatasetRow:
     row = db.get(DatasetRow, row_id)
-    if row is None or row.dataset_id != dataset_id:
+    if row is None or row.dataset_id != dataset_id or row.deleted_at is not None:
         raise HTTPException(status_code=404, detail="row not found")
     return row
+
+
+def _soft_delete(db: Session, row: DatasetRow, user: User) -> None:
+    row.deleted_at = datetime.now(timezone.utc)
+    row.deleted_by = user.id
+    row.rev = row.rev + 1
+    row.updated_by = user.id
+    db.add(RowEdit(row_id=row.id, field="deleted", old_value=False, new_value=True, user_id=user.id))
+
+
+@router.delete("/{dataset_id}/rows/{row_id}", status_code=204)
+def delete_row(
+    dataset_id: uuid.UUID,
+    row_id: uuid.UUID,
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[User, Depends(require_role(Role.EDITOR))],
+    if_match: Annotated[str | None, Header(alias="If-Match")] = None,
+) -> Response:
+    """Soft-delete one row; optimistic locking as for PATCH."""
+    _get_dataset_or_404(db, dataset_id)
+    row = _get_row_or_404(db, dataset_id, row_id)
+    if if_match is None:
+        raise HTTPException(status_code=428, detail="If-Match header required")
+    try:
+        expected_rev = int(if_match)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="If-Match must be an integer rev")
+    if row.rev != expected_rev:
+        return JSONResponse(status_code=409, content=jsonable_encoder(RowRead.model_validate(row)))
+    _soft_delete(db, row, user)
+    db.commit()
+    return Response(status_code=204)
+
+
+@router.post("/{dataset_id}/rows/delete")
+def delete_rows(
+    dataset_id: uuid.UUID,
+    payload: RowsDelete,
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[User, Depends(require_role(Role.EDITOR))],
+) -> dict[str, Any]:
+    """Soft-delete rows by id or by key value, all or nothing.
+
+    Anything not found (or already deleted) is reported and nothing is
+    deleted, so a typo can't half-apply a cleanup.
+    """
+    _get_dataset_or_404(db, dataset_id)
+    live = select(DatasetRow).where(
+        DatasetRow.dataset_id == dataset_id, DatasetRow.deleted_at.is_(None)
+    )
+    if payload.ids is not None:
+        rows = list(db.scalars(live.where(DatasetRow.id.in_(payload.ids))))
+        found = {str(row.id) for row in rows}
+        not_found = [str(i) for i in payload.ids if str(i) not in found]
+    else:
+        keys = payload.keys or []
+        rows = list(db.scalars(live.where(DatasetRow.row_key.in_(keys))))
+        found = {row.row_key for row in rows}
+        not_found = [k for k in keys if k not in found]
+    if not_found:
+        return {"deleted": 0, "not_found": not_found}
+    for row in rows:
+        _soft_delete(db, row, user)
+    db.commit()
+    return {"deleted": len(rows), "not_found": []}
 
 
 @router.patch("/{dataset_id}/rows/{row_id}", response_model=RowRead)
@@ -136,10 +254,22 @@ def patch_row(
 
     fields_set = payload.model_fields_set
     changes: list[tuple[str, Any, Any]] = []
+    claimed_key: str | None = None  # a new key value this patch takes, if any
 
     if payload.data is not None:
         merged_data = {**row.data, **payload.data}
-        validate_row_data(merged_data, _columns_of(db, dataset_id))
+        columns = _columns_of(db, dataset_id)
+        validate_row_data(merged_data, columns)
+        key_col = key_column(columns)
+        if key_col is not None and merged_data.get(key_col.key) != row.data.get(key_col.key):
+            if not has_role(user, Role.EDITOR):
+                raise HTTPException(
+                    status_code=403, detail="changing the key column requires editor role"
+                )
+            claimed_key = merged_data[key_col.key]
+            _ensure_key_free(db, dataset_id, claimed_key, row.id)
+        if key_col is not None:
+            row.row_key = merged_data[key_col.key]
         for key, new_value in payload.data.items():
             old_value = row.data.get(key)
             if old_value != new_value:
@@ -172,7 +302,7 @@ def patch_row(
                 user_id=user.id,
             )
         )
-    db.commit()
+    _commit_keyed(db, claimed_key)
     db.refresh(row)
     return row
 

@@ -3,6 +3,7 @@ import { AuthProvider, useAuth } from './auth/AuthContext'
 import { LoginForm } from './auth/LoginForm'
 import { DatasetListPage } from './datasets/DatasetListPage'
 import { DatasetPage } from './datasets/DatasetPage'
+import { TokensPage } from './tokens/TokensPage'
 import { AppShell } from './shell/AppShell'
 
 function AuthGate() {
@@ -16,6 +17,7 @@ function AuthGate() {
       <Routes>
         <Route path="/" element={<DatasetListPage />} />
         <Route path="/datasets/:datasetId" element={<DatasetPage />} />
+        <Route path="/tokens" element={<TokensPage />} />
       </Routes>
     </AppShell>
   )

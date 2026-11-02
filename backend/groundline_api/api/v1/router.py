@@ -11,6 +11,7 @@ from groundline_api.api.v1 import (
     imports,
     rows,
     schema,
+    sync,
     traces,
     users,
     versions,
@@ -25,4 +26,5 @@ router.include_router(schema.router)
 router.include_router(rows.router)
 router.include_router(versions.router)
 router.include_router(imports.router)
+router.include_router(sync.router)
 router.include_router(traces.router)
