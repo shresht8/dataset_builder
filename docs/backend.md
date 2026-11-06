@@ -79,31 +79,8 @@ empty router: not implemented yet.
 | `export.py` | Render a stored snapshot as jsonl/json/yaml, flat/nested, plus the JSON Schema sidecar. Delegates to `groundline_schema.render`. |
 | `diff.py` | Diff two stored snapshots, matching rows by `id`. |
 
-## Conventions
+## Conventions and tests
 
-- Validation failures are 422 with a `detail` string naming the column.
-  Uniqueness / state conflicts are 409. Missing resources are 404, including
-  soft-deleted rows.
-- Every route takes `db: Annotated[Session, Depends(get_db)]` and a user via
-  `require_role(...)`. Add new routes the same way and register the router in
-  `api/v1/router.py`.
-- Put logic shared by API and CLI in `shared/groundline_schema`, not in the
-  backend.
-- Limits come from settings: `IMPORT_MAX_BYTES` (413), `IMPORT_MAX_NODES`
-  (YAML alias expansion), `JSON_CELL_MAX_BYTES`, `PAT_DEFAULT_TTL_DAYS`.
-
-## Tests
-
-`backend/tests/`, pytest with FastAPI `TestClient` against the real Postgres
-and object storage from `DATABASE_URL` / `STORAGE_*`. `conftest.py` creates one
-user per role per run (unique emails) and offers a dev-login helper. Bring
-services up and migrate first:
-
-```bash
-make db-up && make migrate
-pytest backend                              # whole suite
-pytest backend/tests/test_rows_patch.py -q  # one file
-```
-
-`pytest backend` and `pytest cli` must run separately (both packages are
-named `tests`). `make test` does both.
+Rules, anti-patterns and test commands are in [`backend/AGENTS.md`](../backend/AGENTS.md).
+Settings limits worth knowing: `IMPORT_MAX_BYTES` (413), `IMPORT_MAX_NODES`
+(YAML alias expansion), `JSON_CELL_MAX_BYTES`, `PAT_DEFAULT_TTL_DAYS`.

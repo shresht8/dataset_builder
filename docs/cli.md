@@ -49,13 +49,7 @@ groundline rows pull questions -o questions.yaml
 | `rowfile.py` | Row files (nested records, key column first) and sync state at `<dir>/.groundline/rows/<dataset>/<file>.json` holding `revs` and `bases` (row hashes) from the last pull/push. Keeps other top-level keys of an existing YAML/JSON file. |
 | `schemafile.py` | `infer_columns` (type inference rules in the module docstring), schema file load/render. |
 
-Errors: user-facing failures raise `ApiError`, `LockError`, `RowFileError`,
-`SchemaFileError` or `ConfigError`, print one line and exit 1. Tracebacks
-are bugs.
-
-Tests (`cli/tests/`) never hit a server: the `install_transport` fixture
-routes every `httpx.Client` through `httpx.MockTransport`. Run with
-`pytest cli`.
+Rules, error handling and test commands are in [`cli/AGENTS.md`](../cli/AGENTS.md).
 
 ## Shared package: `groundline_schema`
 

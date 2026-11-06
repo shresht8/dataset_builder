@@ -169,6 +169,7 @@ endpoint, screen, command or feature. Rules for writing them:
 - Edit only the sections your change touches. Delete a statement that is no
   longer true; do not add "previously" notes. Keep `docs/features.md` and the
   route tables in `docs/backend.md` in step with new endpoints and features.
+- Diagrams are mermaid code blocks, not ASCII art.
 - No plans, roadmap or tracker content in `docs/`: describe what the code does today.
 
 ### Stack
@@ -198,10 +199,8 @@ tests mock HTTP and need nothing. The web app has no unit tests; verify UI in a 
 - Tests: `backend/tests/` (also covers `shared/`), `cli/tests/`.
 
 ### Conventions specific to this repo
+- Layer rules live next to the code and load when you work there: [backend/AGENTS.md](backend/AGENTS.md), [web/AGENTS.md](web/AGENTS.md), [cli/AGENTS.md](cli/AGENTS.md).
 - Anything API and CLI must agree on goes in `shared/groundline_schema`, never duplicated.
-- Routes: one router per resource, registered in `api/v1/router.py`; auth via `require_role(Role.X)`; 422 validation, 409 conflict, 404 missing (including soft-deleted rows).
-- Row validation only through `services/validation.py`.
-- Web calls the API only through `web/src/api/client.ts`; mirror backend schema changes in `web/src/api/types.ts`.
 - `§N` and `GL-x-y` references in comments point to an external design doc and tracker. They are context, not files to look for.
 
 ### Forbidden

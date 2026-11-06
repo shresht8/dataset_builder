@@ -40,24 +40,7 @@ trusting this table for completeness.
 
 ## Rules
 
-- Call the API only through `api/client.ts` and type it in `api/types.ts`.
-  Components do not call `fetch` (the one exception is `auth/authConfig.ts`).
-- When a backend schema changes, update `api/types.ts` in the same change; no
-  generator keeps them in sync.
-- Row PATCH sends the row's current `rev` and handles 409 through the conflict
-  dialog. Never drop a conflicting edit silently.
-- Role gating in the UI is a convenience. The API is the real check; show
-  `ApiError.message` instead of guessing a reason. Role flags are computed in
-  `DatasetPage.tsx` from the user's role rank.
-- `date` values are `YYYY-MM-DD` strings. Never `new Date("YYYY-MM-DD")` (it
-  shifts a day west of UTC); use `datasets/dates.ts`.
-- Confirmations use the app's own dialog components, never `window.confirm`.
-  Panels and dialogs close on Escape, except the conflict dialog, which must
-  be resolved explicitly.
-- Cell editors must only produce values the schema accepts.
-- The grid handles its own keyboard model in `DatasetPage.tsx`
-  (`handleTableKeyDown`). Change keys there, and keep `boolean`, `long_text`,
-  `json` and `multi_select` cells in mind.
+Rules and anti-patterns for this layer are in [`web/AGENTS.md`](../web/AGENTS.md).
 
 ## Known gaps
 

@@ -7,21 +7,15 @@ code and CI pull by `name@vN` with hash verification.
 
 ## Components
 
-```
-            browser                         laptop / CI
-               │                                 │
-        web/ (React, Vite)               cli/ (`groundline`, Typer)
-   session cookie │ /v1 (proxied)        PAT bearer │ /v1
-               └──────────────┬──────────────────┘
-                              ▼
-                 backend/ groundline_api (FastAPI)
-                   │                       │
-            Postgres 16               S3-compatible bucket
-     (datasets, columns, rows,     (version snapshots:
-      edits, comments, versions,    manifest.json, schema.json,
-      users, PATs)                  rows.jsonl)
-
-      shared/ groundline_schema: imported by both backend and cli
+```mermaid
+flowchart TB
+    browser["Browser<br/>web/ (React, Vite)"] -->|"/v1 via dev proxy<br/>session cookie"| api
+    cli["laptop / CI<br/>cli/ (groundline, Typer)"] -->|"/v1<br/>PAT bearer"| api
+    api["backend/ groundline_api<br/>(FastAPI)"]
+    api --> pg[("Postgres 16<br/>datasets, columns, rows, edits,<br/>comments, versions, users, PATs")]
+    api --> s3[("S3-compatible bucket<br/>version snapshots:<br/>manifest.json, schema.json, rows.jsonl")]
+    shared["shared/ groundline_schema"] -.imported by.-> api
+    shared -.imported by.-> cli
 ```
 
 | Dir | Package | Role |
