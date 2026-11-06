@@ -158,7 +158,18 @@ datasets. Typed column schema → rows edited in a web grid or synced from files
 [docs/frontend.md](docs/frontend.md) · [docs/cli.md](docs/cli.md) ·
 [docs/features.md](docs/features.md) (feature → files → tests).
 Update the relevant doc in the same change when you add or change a table,
-endpoint, screen, command or feature.
+endpoint, screen, command or feature. Rules for writing them:
+- Docs are a map plus rules, not a copy of the code. Point to the file or
+  function (by name, never by line number) instead of restating props, flags,
+  option lists, key bindings or defaults. Those drift; the code is the source.
+- Keep what code cannot show: invariants, "never do X because Y", gotchas, and
+  what is not implemented.
+- Verify every concrete claim (route, role, table, command, file path) against
+  the source before writing it. If you cannot verify it, leave it out.
+- Edit only the sections your change touches. Delete a statement that is no
+  longer true; do not add "previously" notes. Keep `docs/features.md` and the
+  route tables in `docs/backend.md` in step with new endpoints and features.
+- No plans, roadmap or tracker content in `docs/`: describe what the code does today.
 
 ### Stack
 - Python ≥ 3.11: FastAPI, SQLAlchemy 2 (sync), Alembic, Pydantic 2, Typer, httpx, boto3.
