@@ -148,38 +148,60 @@ Boris Cherny (creator of Claude Code) keeps his team's file around 100 lines. Un
 
 ## 10. Project context
 
-**Fill this in per project. Keep it specific. Delete sections that don't apply.**
+Groundline: a tabular annotation tool that produces versioned evaluation
+datasets. Typed column schema → rows edited in a web grid or synced from files
+→ immutable, hash-verified versions pulled by `name@vN`.
+
+**Repo map (read the one for the layer you touch):**
+[docs/architecture.md](docs/architecture.md) (start here) ·
+[docs/database.md](docs/database.md) · [docs/backend.md](docs/backend.md) ·
+[docs/frontend.md](docs/frontend.md) · [docs/cli.md](docs/cli.md) ·
+[docs/features.md](docs/features.md) (feature → files → tests).
+Update the relevant doc in the same change when you add or change a table,
+endpoint, screen, command or feature.
 
 ### Stack
-- Language and version:
-- Framework(s):
-- Package manager:
-- Runtime / deployment target:
+- Python ≥ 3.11: FastAPI, SQLAlchemy 2 (sync), Alembic, Pydantic 2, Typer, httpx, boto3.
+- Postgres 16; S3-compatible object storage (RustFS locally) for version snapshots.
+- Web: React 19 + TypeScript on Vite 6, react-router 7, TanStack Table; npm.
+- Local services via `infra/docker-compose.yml`; API image from `infra/Dockerfile`.
 
-### Commands
-- Install: `TODO`
-- Build: `TODO`
-- Test (all): `TODO`
-- Test (single file): `TODO`
-- Lint: `TODO`
-- Typecheck: `TODO`
-- Run locally: `TODO`
+### Commands (repo root)
+- Install: `make install` (editable `shared`, `backend`, `cli`), `make web-install`
+- Services + DB: `make db-up`, then `make migrate`
+- Run: `make run` (API on :8000), `make web-dev` (web on :5173, proxies `/v1`)
+- Test (all): `make test` (runs `pytest backend` and `pytest cli` separately; one run can't collect both)
+- Test (single file): `pytest backend/tests/test_rows_patch.py -q`
+- Lint: `make lint` (ruff), `make web-lint` (oxlint)
+- Typecheck web: `make web-build` (`tsc -b && vite build`)
+- New migration: `cd backend && alembic revision --autogenerate -m "..."`
 
-Prefer single-file or single-test runs during iteration. Full suites are for the final verification pass.
+Backend tests need Postgres and object storage running and migrated. CLI
+tests mock HTTP and need nothing. The web app has no unit tests; verify UI in a browser.
 
 ### Layout
-- Source lives in: `TODO`
-- Tests live in: `TODO`
-- Do not modify: `TODO` (generated code, vendored deps, legacy areas)
+- `shared/groundline_schema/`: column types, manifest, JSON Schema, path/record/render helpers used by both API and CLI.
+- `backend/groundline_api/`: `api/v1/` routes, `services/`, `models/`, `schemas/`, `auth/`; migrations in `backend/migrations/versions/`.
+- `cli/groundline_cli/`: `groundline` command.
+- `web/src/`: `api/` (client + types), `auth/`, `datasets/` (grid and panels), `tokens/`, `shell/`.
+- Tests: `backend/tests/` (also covers `shared/`), `cli/tests/`.
 
 ### Conventions specific to this repo
-- Naming: `TODO`
-- Import style: `TODO`
-- Error handling pattern: `TODO`
-- Testing pattern and framework: `TODO`
+- Anything API and CLI must agree on goes in `shared/groundline_schema`, never duplicated.
+- Routes: one router per resource, registered in `api/v1/router.py`; auth via `require_role(Role.X)`; 422 validation, 409 conflict, 404 missing (including soft-deleted rows).
+- Row validation only through `services/validation.py`.
+- Web calls the API only through `web/src/api/client.ts`; mirror backend schema changes in `web/src/api/types.ts`.
+- `§N` and `GL-x-y` references in comments point to an external design doc and tracker. They are context, not files to look for.
 
 ### Forbidden
-- `TODO`: things that look reasonable but will break this project.
+- Mutating or deleting a version, or reading live rows in export/pull/diff. Versions are immutable snapshots in object storage.
+- Hard-deleting rows or columns: rows soft-delete (`deleted_at`), columns archive.
+- Writing to `row_edits` other than appending.
+- Model changes without an Alembic migration, or branching the migration chain.
+- Treating `date` values as JS `Date` / timestamps. They are `YYYY-MM-DD` strings.
+- Row PATCH without `If-Match` rev handling, or swallowing a 409.
+- Enabling dev login outside `APP_ENV=dev`.
+- Committing `.env`, `.local/`, `.claude/`, `CLAUDE.local.md` or customer sample data. Plans and roadmap stay out of this public repo.
 
 ---
 

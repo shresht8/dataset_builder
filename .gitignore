@@ -26,9 +26,6 @@ htmlcov/
 # Claude files
 *.claude
 
-#docs
-docs/
-
 .local/
 .codegraph/
 .codex/
@@ -37,3 +34,6 @@ docs/
 
 # Local-only compose overrides (per-machine port remaps)
 infra/docker-compose.override.yml
+
+# Local agent notes
+CLAUDE.local.md
