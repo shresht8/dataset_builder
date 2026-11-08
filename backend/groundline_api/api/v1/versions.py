@@ -19,7 +19,6 @@ from groundline_schema import Column
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from groundline_api.config import settings
 from groundline_api.deps import get_db, require_role
 from groundline_api.models.dataset import Dataset
 from groundline_api.models.user import Role, User
@@ -27,6 +26,7 @@ from groundline_api.models.version import DatasetVersion
 from groundline_api.schemas.version import VersionCut, VersionDiff, VersionRead
 from groundline_api.services import diff as diff_service
 from groundline_api.services import export, storage
+from groundline_api.services.paths import dataset_path
 from groundline_api.services.versioning import EmptySelectionError, cut_version
 
 router = APIRouter(prefix="/datasets", tags=["versions"])
@@ -56,10 +56,11 @@ def _get_version_or_404(db: Session, dataset_id: uuid.UUID, v: int) -> DatasetVe
     return version
 
 
-def _to_read(version: DatasetVersion, created_by_email: str | None) -> VersionRead:
+def _to_read(version: DatasetVersion, created_by_email: str | None, path: str) -> VersionRead:
     return VersionRead(
         id=version.id,
         dataset_id=version.dataset_id,
+        path=path,
         version=version.version,
         content_hash=f"sha256:{version.content_hash}",
         row_count=version.row_count,
@@ -77,7 +78,7 @@ def cut(
     db: Annotated[Session, Depends(get_db)],
     user: Annotated[User, Depends(require_role(Role.EDITOR))],
 ) -> VersionRead:
-    _get_dataset_or_404(db, dataset_id)
+    dataset = _get_dataset_or_404(db, dataset_id)
     try:
         version = cut_version(
             db,
@@ -88,7 +89,7 @@ def cut(
         )
     except EmptySelectionError:
         raise HTTPException(status_code=422, detail="no rows selected for this version")
-    return _to_read(version, user.email)
+    return _to_read(version, user.email, dataset_path(db, dataset))
 
 
 @router.get("/{dataset_id}/versions", response_model=list[VersionRead])
@@ -97,14 +98,14 @@ def list_versions(
     db: Annotated[Session, Depends(get_db)],
     _user: Annotated[User, Depends(require_role(Role.VIEWER))],
 ) -> list[VersionRead]:
-    _get_dataset_or_404(db, dataset_id)
+    path = dataset_path(db, _get_dataset_or_404(db, dataset_id))
     rows = db.execute(
         select(DatasetVersion, User.email)
         .outerjoin(User, DatasetVersion.created_by == User.id)
         .where(DatasetVersion.dataset_id == dataset_id)
         .order_by(DatasetVersion.version.desc())
     ).all()
-    return [_to_read(version, email) for version, email in rows]
+    return [_to_read(version, email, path) for version, email in rows]
 
 
 @router.get("/{dataset_id}/versions/diff", response_model=VersionDiff)
@@ -116,19 +117,16 @@ def diff_versions(
     to: Annotated[int, Query()],
 ) -> VersionDiff:
     """Diff two versions' stored snapshots (C3). Never reads live rows."""
-    dataset = _get_dataset_or_404(db, dataset_id)
+    _get_dataset_or_404(db, dataset_id)
     from_version = _get_version_or_404(db, dataset_id, from_)
     to_version = _get_version_or_404(db, dataset_id, to)
 
+    # Locations come from snapshot_uri (C2): name-keyed or ID-keyed.
     from_rows = export.parse_rows_jsonl(
-        storage.get_object(
-            settings.storage_bucket, f"datasets/{dataset.name}/v{from_}/rows.jsonl"
-        )
+        storage.get_snapshot_file(from_version.snapshot_uri, "rows.jsonl")
     )
     to_rows = export.parse_rows_jsonl(
-        storage.get_object(
-            settings.storage_bucket, f"datasets/{dataset.name}/v{to}/rows.jsonl"
-        )
+        storage.get_snapshot_file(to_version.snapshot_uri, "rows.jsonl")
     )
 
     result = diff_service.diff_versions(
@@ -149,10 +147,9 @@ def get_manifest(
     db: Annotated[Session, Depends(get_db)],
     _user: Annotated[User, Depends(require_role(Role.VIEWER))],
 ) -> Response:
-    dataset = _get_dataset_or_404(db, dataset_id)
-    _get_version_or_404(db, dataset_id, v)
-    key = f"datasets/{dataset.name}/v{v}/manifest.json"
-    manifest_bytes = storage.get_object(settings.storage_bucket, key)
+    _get_dataset_or_404(db, dataset_id)
+    version = _get_version_or_404(db, dataset_id, v)
+    manifest_bytes = storage.get_snapshot_file(version.snapshot_uri, "manifest.json")
     return Response(content=manifest_bytes, media_type="application/json")
 
 
@@ -187,14 +184,13 @@ def export_version(
     `nested` re-nests each line's `data` from its dotted keys; it is a
     rendering of the same stored bytes, so `content_hash` is unchanged.
     """
-    dataset = _get_dataset_or_404(db, dataset_id)
-    _get_version_or_404(db, dataset_id, v)
-    prefix = f"datasets/{dataset.name}/v{v}/"
-    rows_bytes = storage.get_object(settings.storage_bucket, prefix + "rows.jsonl")
+    _get_dataset_or_404(db, dataset_id)
+    version = _get_version_or_404(db, dataset_id, v)
+    rows_bytes = storage.get_snapshot_file(version.snapshot_uri, "rows.jsonl")
     if format == "jsonl" and shape == "flat":
         return Response(content=rows_bytes, media_type="application/x-ndjson")
 
-    manifest = json.loads(storage.get_object(settings.storage_bucket, prefix + "manifest.json"))
+    manifest = json.loads(storage.get_snapshot_file(version.snapshot_uri, "manifest.json"))
     return Response(
         content=export.render(rows_bytes, manifest, format, shape),
         media_type=_MEDIA_TYPES[format],

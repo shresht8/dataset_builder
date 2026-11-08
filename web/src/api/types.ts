@@ -38,6 +38,14 @@ export interface Column {
   is_key: boolean
 }
 
+// The store entry a collection dataset uses; `created` only on the write that
+// added it to the store (Phase 4, D7).
+export interface StoreSchemaRef {
+  id: string
+  name: string
+  created: boolean
+}
+
 export interface Dataset {
   id: string
   name: string
@@ -45,10 +53,86 @@ export interface Dataset {
   feature_id: string | null
   created_by: string | null
   created_at: string
+  // Phase 4: null collection_id = an unfiled dataset.
+  collection_id: string | null
+  folder_id: string | null
+  store_schema_id: string | null
+  // `collection/folder/.../name`, or the bare name when unfiled.
+  path: string
+  store_schema: StoreSchemaRef | null
 }
 
 export interface Schema {
   columns: Column[]
+  store_schema?: StoreSchemaRef | null
+}
+
+// A column as the schema endpoints accept it (order/archived are server-managed).
+export interface ColumnInput {
+  key: string
+  label: string
+  type: ColumnType
+  options?: string[] | null
+  required: boolean
+  json_schema?: Record<string, unknown> | null
+  is_key?: boolean
+}
+
+// Mirrors backend/groundline_api/schemas/collection.py (Phase 4, C5).
+export interface Collection {
+  id: string
+  name: string
+  description: string | null
+  created_by: string | null
+  created_at: string
+  dataset_count: number
+}
+
+export interface Folder {
+  id: string
+  collection_id: string
+  name: string
+  parent_id: string | null
+}
+
+export interface TreeDataset {
+  id: string
+  name: string
+  description: string | null
+  folder_id: string | null
+  store_schema_id: string | null
+  store_schema_name: string | null
+  row_count: number
+  version_count: number
+}
+
+export interface CollectionTree extends Collection {
+  folders: Folder[]
+  datasets: TreeDataset[]
+}
+
+export interface UsedBy {
+  id: string
+  name: string
+  path: string
+}
+
+export interface StoreEntry {
+  id: string
+  collection_id: string
+  name: string
+  columns: Column[]
+  content_hash: string
+  created_at: string
+  updated_at: string
+  used_by: UsedBy[]
+}
+
+// POST /v1/schema/infer (GL-117).
+export interface InferResponse {
+  columns: ColumnInput[]
+  warnings: string[]
+  record_count: number
 }
 
 // Row status flow (§4): draft -> needs_review -> approved.
@@ -128,6 +212,7 @@ export interface ImportCommitResponse {
 export interface VersionRead {
   id: string
   dataset_id: string
+  path: string
   version: number
   content_hash: string // "sha256:<64 hex>"
   row_count: number
@@ -148,4 +233,25 @@ export interface ApiToken {
 
 export interface ApiTokenCreated extends ApiToken {
   token: string
+}
+
+// POST /v1/collections/import/preview (GL-122).
+export interface BundleReport {
+  name: string
+  name_taken: boolean
+  description: string | null
+  source: string
+  folders: string[]
+  store: { name: string; columns: number; error: string | null }[]
+  datasets: {
+    path: string
+    store_schema: string
+    description: string | null
+    rows: number
+    valid: number
+    error_count: number
+    errors: ImportValidationError[]
+  }[]
+  errors: string[]
+  ok: boolean
 }

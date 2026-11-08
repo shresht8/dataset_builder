@@ -4,7 +4,13 @@
 import type {
   ApiToken,
   ApiTokenCreated,
+  BundleReport,
+  Collection,
+  CollectionTree,
+  ColumnInput,
   Dataset,
+  Folder,
+  InferResponse,
   ImportCommitResponse,
   ImportPreviewResponse,
   Row,
@@ -12,6 +18,7 @@ import type {
   RowEdit,
   RowStatus,
   Schema,
+  StoreEntry,
   User,
   VersionRead,
 } from './types'
@@ -60,8 +67,123 @@ export function logout(): Promise<void> {
   return apiFetch<void>('/auth/logout', { method: 'POST' })
 }
 
-export function listDatasets(): Promise<Dataset[]> {
-  return apiFetch<Dataset[]>('/datasets')
+export interface DatasetFilters {
+  collectionId?: string
+  folderId?: string
+  unfiled?: boolean
+}
+
+export function listDatasets(filters: DatasetFilters = {}): Promise<Dataset[]> {
+  const params = new URLSearchParams()
+  if (filters.collectionId) params.set('collection_id', filters.collectionId)
+  if (filters.folderId) params.set('folder_id', filters.folderId)
+  if (filters.unfiled) params.set('unfiled', 'true')
+  const qs = params.toString()
+  return apiFetch<Dataset[]>(`/datasets${qs ? `?${qs}` : ''}`)
+}
+
+// Create a dataset with its schema in one transaction (Phase 4). In a
+// collection give `store_schema_id` or `columns` (resolved against the store).
+export interface DatasetCreatePayload {
+  name: string
+  description?: string | null
+  collection_id?: string | null
+  folder_id?: string | null
+  store_schema_id?: string | null
+  columns?: ColumnInput[] | null
+}
+
+export function createDataset(payload: DatasetCreatePayload): Promise<Dataset> {
+  return apiFetch<Dataset>('/datasets', { method: 'POST', body: JSON.stringify(payload) })
+}
+
+// `collectionId: null` makes the dataset unfiled; its data is kept (D9).
+export function moveDataset(datasetId: string, collectionId: string | null, folderId: string | null): Promise<Dataset> {
+  return apiFetch<Dataset>(`/datasets/${datasetId}/move`, {
+    method: 'POST',
+    body: JSON.stringify({ collection_id: collectionId, folder_id: folderId }),
+  })
+}
+
+export function putSchema(datasetId: string, columns: ColumnInput[]): Promise<Schema> {
+  return apiFetch<Schema>(`/datasets/${datasetId}/schema`, {
+    method: 'PUT',
+    body: JSON.stringify({ columns }),
+  })
+}
+
+export function applyStoreSchema(datasetId: string, storeSchemaId: string): Promise<Schema> {
+  return apiFetch<Schema>(`/datasets/${datasetId}/schema/apply`, {
+    method: 'POST',
+    body: JSON.stringify({ store_schema_id: storeSchemaId }),
+  })
+}
+
+// Collections and folders (Phase 4, GL-114).
+export function listCollections(): Promise<Collection[]> {
+  return apiFetch<Collection[]>('/collections')
+}
+
+export function getCollection(collectionId: string): Promise<CollectionTree> {
+  return apiFetch<CollectionTree>(`/collections/${collectionId}`)
+}
+
+export function createCollection(name: string, description: string | null): Promise<Collection> {
+  return apiFetch<Collection>('/collections', { method: 'POST', body: JSON.stringify({ name, description }) })
+}
+
+export function deleteCollection(collectionId: string): Promise<void> {
+  return apiFetch<void>(`/collections/${collectionId}`, { method: 'DELETE' })
+}
+
+export function createFolder(collectionId: string, name: string, parentId: string | null): Promise<Folder> {
+  return apiFetch<Folder>(`/collections/${collectionId}/folders`, {
+    method: 'POST',
+    body: JSON.stringify({ name, parent_id: parentId }),
+  })
+}
+
+export function renameFolder(folderId: string, name: string): Promise<Folder> {
+  return apiFetch<Folder>(`/folders/${folderId}`, { method: 'PATCH', body: JSON.stringify({ name }) })
+}
+
+export function deleteFolder(folderId: string): Promise<void> {
+  return apiFetch<void>(`/folders/${folderId}`, { method: 'DELETE' })
+}
+
+// Schema store (Phase 4, GL-115). A used entry is frozen: PUT/DELETE give 409
+// with `used_by` in the body.
+export function listStore(collectionId: string): Promise<StoreEntry[]> {
+  return apiFetch<StoreEntry[]>(`/collections/${collectionId}/schemas`)
+}
+
+export function createStoreEntry(collectionId: string, name: string, columns: ColumnInput[]): Promise<StoreEntry> {
+  return apiFetch<StoreEntry>(`/collections/${collectionId}/schemas`, {
+    method: 'POST',
+    body: JSON.stringify({ name, columns }),
+  })
+}
+
+export function updateStoreEntry(
+  collectionId: string,
+  entryId: string,
+  payload: { name?: string; columns?: ColumnInput[] },
+): Promise<StoreEntry> {
+  return apiFetch<StoreEntry>(`/collections/${collectionId}/schemas/${entryId}`, {
+    method: 'PUT',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function duplicateStoreEntry(collectionId: string, entryId: string, name: string): Promise<StoreEntry> {
+  return apiFetch<StoreEntry>(`/collections/${collectionId}/schemas/${entryId}/duplicate`, {
+    method: 'POST',
+    body: JSON.stringify({ name }),
+  })
+}
+
+export function deleteStoreEntry(collectionId: string, entryId: string): Promise<void> {
+  return apiFetch<void>(`/collections/${collectionId}/schemas/${entryId}`, { method: 'DELETE' })
 }
 
 export function getDataset(datasetId: string): Promise<Dataset> {
@@ -222,6 +344,47 @@ export function commitImport(
   if (Object.keys(fixes).length > 0) form.append('fixes', JSON.stringify(fixes))
   if (recordsKey) form.append('records_key', recordsKey)
   return apiFetchForm<ImportCommitResponse>(`/datasets/${datasetId}/import`, form)
+}
+
+// Schema inference (GL-117): drafts columns from a data file; creates nothing.
+// A 422 may carry `records_key_candidates`, as import preview does.
+export function inferSchema(file: File, recordsKey?: string): Promise<InferResponse> {
+  const form = new FormData()
+  form.append('file', file)
+  if (recordsKey) form.append('records_key', recordsKey)
+  return apiFetchForm<InferResponse>('/schema/infer', form)
+}
+
+// Collection bundles (GL-122). Export returns the zip and the paths of
+// datasets skipped by a `latest` export (they have no version).
+export async function exportCollection(
+  collectionId: string,
+  source: 'draft' | 'latest',
+): Promise<{ blob: Blob; skipped: string[] }> {
+  const response = await fetch(`/v1/collections/${collectionId}/export?source=${source}`, {
+    credentials: 'include',
+  })
+  if (!response.ok) {
+    const body = await response.json().catch(() => null)
+    throw new ApiError(response.status, body?.detail ?? response.statusText, body)
+  }
+  const skipped = JSON.parse(response.headers.get('X-Groundline-Skipped') ?? '[]') as string[]
+  return { blob: await response.blob(), skipped }
+}
+
+function bundleForm(file: File, name?: string): FormData {
+  const form = new FormData()
+  form.append('file', file)
+  if (name) form.append('name', name)
+  return form
+}
+
+export function previewBundle(file: File, name?: string): Promise<BundleReport> {
+  return apiFetchForm<BundleReport>('/collections/import/preview', bundleForm(file, name))
+}
+
+export function importBundle(file: File, name?: string): Promise<Collection> {
+  return apiFetchForm<Collection>('/collections/import', bundleForm(file, name))
 }
 
 // Personal access tokens (GL-1-10, page GL-3.5-19). A token acts as the user

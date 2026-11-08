@@ -10,6 +10,7 @@ import typer
 from groundline_cli.client import ApiClient, ApiError
 from groundline_cli.commands._run import api, fail
 from groundline_cli.config import ConfigError, load_config
+from groundline_cli.paths import locate, split_path
 from groundline_cli.schemafile import SchemaFileError, load_schema_file
 
 app = typer.Typer(help="List, create and diff datasets")
@@ -35,8 +36,10 @@ def _print_table(headers: list[str], rows: list[list[str]]) -> None:
 
 
 @app.command("list")
-def list_() -> None:
-    """List datasets available to the caller."""
+def list_(
+    collection: str = typer.Option(None, "--collection", help="only datasets in this collection"),
+) -> None:
+    """List datasets available to the caller, by path."""
     try:
         config = load_config()
     except ConfigError as exc:
@@ -45,14 +48,15 @@ def list_() -> None:
 
     with ApiClient(config) as client:
         try:
-            datasets = client.list_datasets()
+            collection_id = client.find_collection(collection)["id"] if collection else None
+            datasets = client.list_datasets(collection_id)
             rows = []
             for dataset in datasets:
                 versions = client.get_versions(dataset["id"])
                 latest = str(versions[0]["version"]) if versions else "-"
                 rows.append(
                     [
-                        dataset["name"],
+                        dataset.get("path") or dataset["name"],
                         dataset["id"],
                         dataset["feature_id"] or "-",
                         latest,
@@ -65,7 +69,7 @@ def list_() -> None:
     if not rows:
         typer.echo("no datasets")
         return
-    _print_table(["NAME", "ID", "FEATURE", "LATEST"], rows)
+    _print_table(["PATH", "ID", "FEATURE", "LATEST"], rows)
 
 
 def _render_diff(result: dict) -> None:
@@ -103,17 +107,57 @@ def _render_diff(result: dict) -> None:
             typer.echo(f"  changed: {', '.join(schema_changes['changed'])}")
 
 
+def store_outcome(store_schema: dict | None) -> str | None:
+    """'added to store as X' / 'using store schema X' for a collection dataset (D7)."""
+    if not store_schema:
+        return None
+    if store_schema.get("created"):
+        return f"added to store as {store_schema['name']}"
+    return f"using store schema {store_schema['name']}"
+
+
 @app.command("create")
 def create(
-    name: str,
-    schema: str = typer.Option(..., "--schema", help="schema file (see `schema infer`)"),
+    name: str = typer.Argument(..., help="name, or collection/folder/.../name"),
+    schema: str = typer.Option(None, "--schema", help="schema file (see `schema infer`)"),
+    from_store: str = typer.Option(
+        None, "--from-store", help="use this store schema (collection datasets only)"
+    ),
     description: str = typer.Option(None, "--description"),
 ) -> None:
-    """Create a dataset and set its schema from a schema file."""
+    """Create a dataset with a schema file, or (in a collection) a store schema."""
+    if (schema is None) == (from_store is None):
+        fail("give --schema FILE, or --from-store ENTRY (not both)")
     try:
-        columns = load_schema_file(Path(schema))
-    except SchemaFileError as exc:
+        segments = split_path(name)
+    except ApiError as exc:
         fail(str(exc))
+    columns = None
+    if schema is not None:
+        try:
+            columns = load_schema_file(Path(schema))
+        except SchemaFileError as exc:
+            fail(str(exc))
+    if len(segments) > 1:
+        with api() as client:
+            collection, folder_id = locate(client, segments[:-1])
+            store_schema_id = (
+                client.find_store_entry(collection["id"], from_store)["id"] if from_store else None
+            )
+            dataset = client.create_dataset(
+                segments[-1],
+                description,
+                collection_id=collection["id"],
+                folder_id=folder_id,
+                store_schema_id=store_schema_id,
+                columns=columns,
+            )
+            count = len(client.get_schema(dataset["id"])["columns"])
+        typer.echo(f"created {dataset.get('path', name)} with {count} columns")
+        typer.echo(store_outcome(dataset.get("store_schema")))
+        return
+    if from_store:
+        fail("--from-store needs a collection path (collection/.../name)")
     with api() as client:
         dataset = client.create_dataset(name, description)
         try:
@@ -124,6 +168,31 @@ def create(
                 f"fix {schema}, then run: groundline schema push {name} {schema}"
             )
     typer.echo(f"created {name} with {len(columns)} columns")
+
+
+@app.command("move")
+def move(
+    path: str = typer.Argument(..., help="the dataset's current path"),
+    to: str = typer.Option(None, "--to", help="target: COLLECTION or COLLECTION/FOLDER/..."),
+    unfiled: bool = typer.Option(False, "--unfiled", help="take it out of its collection"),
+) -> None:
+    """Move a dataset into, between or out of collections. Its data is kept."""
+    if (to is None) == (not unfiled):
+        fail("give --to COLLECTION[/FOLDER...], or --unfiled (not both)")
+    with api() as client:
+        dataset = client.resolve(path)
+        if unfiled:
+            collection_id, folder_id = None, None
+        else:
+            try:
+                collection, folder_id = locate(client, split_path(to))
+            except ApiError as exc:
+                fail(str(exc))
+            collection_id = collection["id"]
+        moved = client.move_dataset(dataset["id"], collection_id, folder_id)
+    typer.echo(f"moved {path} -> {moved.get('path')}")
+    if moved.get("store_schema") and moved.get("collection_id") != dataset.get("collection_id"):
+        typer.echo(store_outcome(moved["store_schema"]))
 
 
 @app.command("delete")

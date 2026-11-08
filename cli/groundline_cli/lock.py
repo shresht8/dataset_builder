@@ -3,11 +3,18 @@
 The lock file pins each dataset to a version and content_hash, plus the
 format and shape it was pulled in when those aren't the defaults (GL-3.5-13)::
 
-    {"datasets": {"<name>": {"version": N, "content_hash": "sha256:...",
+    {"datasets": {"<path>": {"version": N, "content_hash": "sha256:...",
+                             "dataset_id": "<uuid>",
                              "format": "yaml", "shape": "nested"}}}
 
 A missing `format` / `shape` means `jsonl` / `flat`, so lock files written
 before GL-3.5-13 (and default pulls) are unchanged.
+
+Entries are keyed by dataset path (`collection/folder/.../name`, or the bare
+name of an unfiled dataset) and record the dataset's `dataset_id` (Phase 4,
+D4). `pull --lock` restores an entry by its id, so moving a dataset never
+breaks a lock: it warns that the path changed and restores into the pinned
+path anyway. Entries without `dataset_id` (older lock files) resolve by path.
 
 `pull <name>@vN` updates one entry (creating the file if absent).
 `pull --lock` restores every pinned dataset in its pinned format and shape,
@@ -21,6 +28,8 @@ from __future__ import annotations
 
 import json
 import shutil
+import sys
+from collections.abc import Callable
 from pathlib import Path
 
 from groundline_schema.render import FORMATS, SHAPES
@@ -85,10 +94,13 @@ def update_lock(
     content_hash: str,
     fmt: str = "jsonl",
     shape: str = "flat",
+    dataset_id: str | None = None,
 ) -> None:
     """Add or replace one dataset's pin, creating the lock file if absent."""
     datasets = _load(path)
     entry: dict = {"version": version, "content_hash": content_hash}
+    if dataset_id is not None:
+        entry["dataset_id"] = dataset_id
     for field, value in (("format", fmt), ("shape", shape)):
         if value != _DEFAULTS[field]:
             entry[field] = value
@@ -108,12 +120,17 @@ def _resolve(name: str, entry: dict, field: str, flag: str | None) -> str:
     return pinned or flag or _DEFAULTS[field]
 
 
+def _stderr(message: str) -> None:
+    print(message, file=sys.stderr)
+
+
 def restore_lock(
     client: ApiClient,
     lock_path: Path,
     fmt: str | None,
     out: Path,
     shape: str | None = None,
+    warn: Callable[[str], None] = _stderr,
 ) -> list[tuple[str, int, str]]:
     """Pull every dataset pinned in the lock, verifying each against its pin.
 
@@ -134,7 +151,16 @@ def restore_lock(
         version = entry["version"]
         pinned_hash = entry["content_hash"]
         entry_fmt, entry_shape = plan[name]
-        content_hash = pull_version(client, name, version, entry_fmt, out, entry_shape)
+        dataset_id = entry.get("dataset_id")
+        if dataset_id is not None:
+            current = client.get_dataset(dataset_id).get("path", name)
+            if current != name:
+                warn(
+                    f"warning: {name} has moved to {current}; restoring it by id into {out / name}"
+                )
+        content_hash = pull_version(
+            client, name, version, entry_fmt, out, entry_shape, dataset_id=dataset_id
+        )
         if content_hash != pinned_hash:
             shutil.rmtree(out / name, ignore_errors=True)
             raise LockError(

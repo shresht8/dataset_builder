@@ -1,7 +1,9 @@
 """Object storage for version snapshots (§6).
 
-Writes datasets/{name}/v{n}/{manifest.json,schema.json,rows.jsonl} to an
-S3-compatible bucket and reads them back for export/pull.
+Writes datasets/{dataset_id}/v{n}/{manifest.json,schema.json,rows.jsonl} to
+an S3-compatible bucket and reads them back for export/pull. Versions cut
+before Phase 4 live under datasets/{name}/v{n}/; every read takes the location
+from the version's stored `snapshot_uri` (C2), so both layouts stay readable.
 """
 
 from __future__ import annotations
@@ -18,6 +20,20 @@ class SnapshotExistsError(RuntimeError):
 
 class ObjectNotFoundError(RuntimeError):
     """No object exists at the given key."""
+
+
+def parse_snapshot_uri(snapshot_uri: str) -> tuple[str, str]:
+    """`s3://bucket/prefix/` -> (bucket, "prefix/")."""
+    if not snapshot_uri.startswith("s3://"):
+        raise ValueError(f"not an s3:// snapshot uri: {snapshot_uri!r}")
+    bucket, _, prefix = snapshot_uri.removeprefix("s3://").partition("/")
+    return bucket, prefix if prefix.endswith("/") else prefix + "/"
+
+
+def get_snapshot_file(snapshot_uri: str, name: str) -> bytes:
+    """Read one file (rows.jsonl, manifest.json, schema.json) of a stored version."""
+    bucket, prefix = parse_snapshot_uri(snapshot_uri)
+    return get_object(bucket, prefix + name)
 
 
 def _client():

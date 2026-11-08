@@ -14,7 +14,7 @@
 // in `skip`. `handledRows` tracks exactly that: every row index already
 // imported or explicitly skipped, folded into `skip` on every subsequent
 // commit call.
-import { useState, type KeyboardEvent } from 'react'
+import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { ApiError, commitImport, previewImport } from '../api/client'
 import type { Column, ImportPreviewResponse, ImportSampleRow, ImportValidationError } from '../api/types'
 import { DateInput } from './Cell'
@@ -73,6 +73,10 @@ interface ImportWizardProps {
   columns: Column[]
   onClose: () => void
   onImported: () => void
+  // Phase 4 (GL-121): start from a file the user already uploaded (the
+  // new-dataset wizard), skipping the upload step.
+  initialFile?: File
+  initialRecordsKey?: string
 }
 
 type Step = 'upload' | 'mapping' | 'review'
@@ -158,7 +162,14 @@ function FixInput({
   )
 }
 
-export function ImportWizard({ datasetId, columns, onClose, onImported }: ImportWizardProps) {
+export function ImportWizard({
+  datasetId,
+  columns,
+  onClose,
+  onImported,
+  initialFile,
+  initialRecordsKey,
+}: ImportWizardProps) {
   const activeColumns = columns.filter((c) => !c.archived)
   const columnsByKey = new Map(activeColumns.map((c) => [c.key, c]))
 
@@ -207,6 +218,16 @@ export function ImportWizard({ datasetId, columns, onClose, onImported }: Import
       setBusy(false)
     }
   }
+
+  const started = useRef(false)
+  useEffect(() => {
+    if (!initialFile || started.current) return
+    started.current = true
+    setRecordsKey(initialRecordsKey)
+    void loadPreview(initialFile, initialRecordsKey)
+    // Run once, for the file passed in.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   function handleFile(chosen: File) {
     setRecordsKey(undefined)

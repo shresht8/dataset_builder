@@ -124,8 +124,8 @@ def cut_version(client, as_role, dataset_id, storage_bucket):
 def test_jsonl_bytes_identical_to_stored_and_hash_matches(
     client, as_role, dataset_id, storage_bucket, cut_version
 ):
-    dataset_name, version, _ = cut_version
-    stored_bytes = _get_object(storage_bucket, dataset_name, version, "rows.jsonl")
+    _dataset_name, version, _ = cut_version
+    stored_bytes = _get_object(storage_bucket, dataset_id, version, "rows.jsonl")
 
     as_role("viewer")
     resp = client.get(f"/v1/datasets/{dataset_id}/versions/{version}")
@@ -133,7 +133,7 @@ def test_jsonl_bytes_identical_to_stored_and_hash_matches(
     assert resp.headers["content-type"].startswith("application/x-ndjson")
     assert resp.content == stored_bytes
 
-    manifest = json.loads(_get_object(storage_bucket, dataset_name, version, "manifest.json"))
+    manifest = json.loads(_get_object(storage_bucket, dataset_id, version, "manifest.json"))
     content_hash = manifest["content_hash"].removeprefix("sha256:")
     assert hashlib.sha256(resp.content).hexdigest() == content_hash
 

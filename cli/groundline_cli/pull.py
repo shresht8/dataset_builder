@@ -1,18 +1,19 @@
 """Pull a dataset version's snapshot to disk, with hash verification (§7).
 
-`pull_version` is the shared core for `groundline pull <name>@vN` and, from
-GL-3-8, `groundline pull --lock`. It always fetches the `jsonl` bytes first
+`pull_version` is the shared core for `groundline pull <path>@vN` and, from
+GL-3-8, `groundline pull --lock`. A path is `collection/folder/.../name`, or
+the bare name of an unfiled dataset (Phase 4, C1). It always fetches the `jsonl` bytes first
 and verifies `content_hash` (C3) before writing anything to disk. json, yaml
 and the `nested` shape are then rendered locally from those verified bytes
 with the API's own renderer (GL-3.5-13), so every file written is covered by
 the hash check and a hash mismatch never leaves a half-written or unverified
 data file behind.
 
-Output layout, chosen for this card::
+Output layout (an unfiled dataset's path is its name, as before)::
 
-    <out>/<name>/v<N>/rows.<fmt>
-    <out>/<name>/v<N>/manifest.json
-    <out>/<name>/v<N>/<name>.schema.json     # JSON Schema sidecar (in `shape`)
+    <out>/<path>/v<N>/rows.<fmt>
+    <out>/<path>/v<N>/manifest.json
+    <out>/<path>/v<N>/<name>.schema.json     # JSON Schema sidecar (in `shape`)
 """
 
 from __future__ import annotations
@@ -26,7 +27,8 @@ from groundline_schema.render import render
 
 from groundline_cli.client import ApiClient, ApiError
 
-TARGET_PATTERN = re.compile(r"^(?P<name>[a-z0-9][a-z0-9_-]{0,99})@v(?P<version>\d+)$")
+_SEGMENT = r"[a-z0-9][a-z0-9_-]{0,99}"
+TARGET_PATTERN = re.compile(rf"^(?P<name>{_SEGMENT}(?:/{_SEGMENT})*)@v(?P<version>\d+)$")
 
 
 class HashMismatchError(Exception):
@@ -34,18 +36,29 @@ class HashMismatchError(Exception):
 
 
 def parse_target(target: str) -> tuple[str, int]:
-    """Parse `name@vN`. Raises `ApiError` (a clean, one-line CLI error) on bad syntax."""
+    """Parse `path@vN`. Raises `ApiError` (a clean, one-line CLI error) on bad syntax."""
     match = TARGET_PATTERN.match(target)
     if not match:
-        raise ApiError(f"invalid target '{target}': expected name@vN")
+        raise ApiError(f"invalid target '{target}': expected name@vN or collection/.../name@vN")
     return match.group("name"), int(match.group("version"))
 
 
 def pull_version(
-    client: ApiClient, name: str, version: int, fmt: str, out: Path, shape: str = "flat"
+    client: ApiClient,
+    name: str,
+    version: int,
+    fmt: str,
+    out: Path,
+    shape: str = "flat",
+    dataset_id: str | None = None,
 ) -> str:
-    """Fetch, verify, and write one dataset version. Returns the verified content_hash."""
-    dataset_id = client.resolve_dataset_id(name)
+    """Fetch, verify, and write one dataset version. Returns the verified content_hash.
+
+    `name` is the dataset's path, and where the files go under `out`. With
+    `dataset_id` the dataset is fetched by id (`pull --lock` after a move).
+    """
+    if dataset_id is None:
+        dataset_id = client.resolve_dataset_id(name)
 
     jsonl_bytes = client.get_version_bytes(dataset_id, version, "jsonl")
     manifest = client.get_manifest(dataset_id, version)
@@ -66,16 +79,19 @@ def pull_version(
     (version_dir / "manifest.json").write_text(
         json.dumps(manifest, indent=2), encoding="utf-8"
     )
-    (version_dir / f"{name}.schema.json").write_text(
+    (version_dir / f"{name.rsplit('/', 1)[-1]}.schema.json").write_text(
         json.dumps(sidecar, indent=2), encoding="utf-8"
     )
     return expected_hash
 
 
-def check_drift(client: ApiClient, name: str, version: int) -> list[str]:
+def check_drift(
+    client: ApiClient, name: str, version: int, dataset_id: str | None = None
+) -> list[str]:
     """Required columns in the dataset's *current* schema missing from the pulled
     version's schema (Q2). Returns the sorted list of missing column keys."""
-    dataset_id = client.resolve_dataset_id(name)
+    if dataset_id is None:
+        dataset_id = client.resolve_dataset_id(name)
     sidecar = client.get_jsonschema(dataset_id, version)
     pulled_required = set(sidecar.get("properties", {}).get("data", {}).get("required", []))
     current_schema = client.get_schema(dataset_id)

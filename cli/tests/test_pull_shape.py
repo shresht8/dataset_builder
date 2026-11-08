@@ -119,6 +119,7 @@ def test_cli_pull_pins_format_and_shape(monkeypatch, tmp_path, install_transport
     assert result.exit_code == 0, result.output
     assert json.loads(lock_path.read_text())["datasets"]["demo"] == {
         "version": 1, "content_hash": GOOD_HASH, "format": "yaml", "shape": "nested",
+        "dataset_id": "ds1",
     }
 
 

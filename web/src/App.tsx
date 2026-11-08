@@ -5,6 +5,7 @@ import { DatasetListPage } from './datasets/DatasetListPage'
 import { DatasetPage } from './datasets/DatasetPage'
 import { TokensPage } from './tokens/TokensPage'
 import { AppShell } from './shell/AppShell'
+import { CollectionPage } from './collections/CollectionPage'
 
 function AuthGate() {
   const { user, loading } = useAuth()
@@ -16,6 +17,7 @@ function AuthGate() {
     <AppShell>
       <Routes>
         <Route path="/" element={<DatasetListPage />} />
+        <Route path="/collections/:collectionId" element={<CollectionPage />} />
         <Route path="/datasets/:datasetId" element={<DatasetPage />} />
         <Route path="/tokens" element={<TokensPage />} />
       </Routes>

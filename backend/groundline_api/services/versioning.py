@@ -24,6 +24,7 @@ from groundline_api.models.row import DatasetRow, RowStatus
 from groundline_api.models.user import User
 from groundline_api.models.version import DatasetVersion
 from groundline_api.services import storage
+from groundline_api.services.paths import dataset_path
 
 
 class EmptySelectionError(Exception):
@@ -108,6 +109,8 @@ def cut_version(
 
     manifest = Manifest(
         dataset=dataset.name,
+        dataset_id=str(dataset.id),
+        path=dataset_path(db, dataset),
         version=next_version,
         content_hash=f"sha256:{content_hash}",
         row_count=len(rows),
@@ -118,7 +121,8 @@ def cut_version(
     )
     manifest_bytes = manifest.model_dump_json().encode("utf-8")
 
-    prefix = f"datasets/{dataset.name}/v{next_version}/"
+    # By ID, not name (Phase 4, C2): names are only unique within a parent.
+    prefix = f"datasets/{dataset.id}/v{next_version}/"
     storage.put_snapshot(
         settings.storage_bucket,
         prefix,

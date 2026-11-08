@@ -20,6 +20,8 @@ class VersionCut(BaseModel):
 class VersionRead(BaseModel):
     id: uuid.UUID
     dataset_id: uuid.UUID
+    # The dataset's current path (C1); the path at cut time is in the manifest.
+    path: str = ""
     version: int
     content_hash: str  # "sha256:<hex>" (C2), unlike the DB column
     row_count: int

@@ -48,6 +48,34 @@ def role_users():
 
 
 @pytest.fixture()
+def cleanup():
+    """Phase 4: collect collection and dataset ids; delete them (datasets first) after the test."""
+    from groundline_api.models.collection import Collection
+    from groundline_api.models.dataset import Dataset
+    from sqlalchemy import select
+
+    ids: dict[str, list] = {"collections": [], "datasets": []}
+    yield ids
+    db = SessionLocal()
+    try:
+        for cid in ids["collections"]:
+            for dataset in db.scalars(select(Dataset).where(Dataset.collection_id == uuid.UUID(str(cid)))):
+                db.delete(dataset)
+        for did in ids["datasets"]:
+            dataset = db.get(Dataset, uuid.UUID(str(did)))
+            if dataset is not None:
+                db.delete(dataset)
+        db.flush()
+        for cid in ids["collections"]:
+            collection = db.get(Collection, uuid.UUID(str(cid)))
+            if collection is not None:
+                db.delete(collection)
+        db.commit()
+    finally:
+        db.close()
+
+
+@pytest.fixture()
 def as_role(client, role_users):
     """Log the shared client in as the given role; returns the user payload."""
 

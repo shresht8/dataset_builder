@@ -9,5 +9,6 @@ Design ref: docs/groundline-dataset-builder.md §3 (data model), §7 (export).
 
 from groundline_schema.column_types import Column, ColumnType
 from groundline_schema.jsonschema import build_json_schema
+from groundline_schema.schema_hash import schema_hash
 
-__all__ = ["Column", "ColumnType", "build_json_schema"]
+__all__ = ["Column", "ColumnType", "build_json_schema", "schema_hash"]

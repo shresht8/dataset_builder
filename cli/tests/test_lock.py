@@ -205,7 +205,7 @@ def test_cli_pull_updates_lock_entry(monkeypatch, tmp_path, install_transport):
 
     assert result.exit_code == 0, result.output
     data = json.loads(lock_path.read_text(encoding="utf-8"))
-    assert data == {"datasets": {"demo": {"version": 1, "content_hash": GOOD_HASH}}}
+    assert data == {"datasets": {"demo": {"version": 1, "content_hash": GOOD_HASH, "dataset_id": "ds1"}}}
 
 
 def test_cli_pull_switching_version_rewrites_only_that_entry_deterministically(
@@ -232,8 +232,8 @@ def test_cli_pull_switching_version_rewrites_only_that_entry_deterministically(
     after_v2 = json.loads(lock_path.read_text(encoding="utf-8"))
 
     assert json.loads(before)["datasets"]["other"] == after_v2["datasets"]["other"]
-    assert after_v1["datasets"]["demo"] == {"version": 1, "content_hash": GOOD_HASH}
-    assert after_v2["datasets"]["demo"] == {"version": 2, "content_hash": GOOD_HASH_V2}
+    assert after_v1["datasets"]["demo"] == {"version": 1, "content_hash": GOOD_HASH, "dataset_id": "ds1"}
+    assert after_v2["datasets"]["demo"] == {"version": 2, "content_hash": GOOD_HASH_V2, "dataset_id": "ds1"}
 
 
 def test_cli_pull_lock_restores_all_pinned(monkeypatch, tmp_path, install_transport):

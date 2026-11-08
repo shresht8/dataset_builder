@@ -1,6 +1,7 @@
 """`datasets` and `dataset_columns` tables (§3).
 
-    datasets         id, project_id, name, description, feature_id?, created_by
+    datasets         id, project_id, name, description, feature_id?, created_by,
+                     collection_id?, folder_id?, store_schema_id? (Phase 4)
     dataset_columns  dataset_id, key, label, type, options, required, order, archived,
                      json_schema?, is_key
 """
@@ -11,11 +12,11 @@ import uuid
 from datetime import datetime
 
 import sqlalchemy as sa
+from groundline_schema import ColumnType
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from groundline_api.db import Base
-from groundline_schema import ColumnType
 
 # Native Postgres enum over the §3 column types ('text', 'long_text', ...).
 column_type_enum = sa.Enum(
@@ -27,7 +28,36 @@ column_type_enum = sa.Enum(
 
 class Dataset(Base):
     __tablename__ = "datasets"
-    __table_args__ = (sa.UniqueConstraint("name", name="uq_datasets_name"),)
+    __table_args__ = (
+        # A name is unique within its parent (D2, C1): among unfiled datasets,
+        # or within one folder (or the root) of one collection.
+        sa.Index(
+            "uq_datasets_unfiled_name",
+            "name",
+            unique=True,
+            postgresql_where=sa.text("collection_id IS NULL"),
+        ),
+        sa.Index(
+            "uq_datasets_collection_folder_name",
+            "collection_id",
+            "folder_id",
+            "name",
+            unique=True,
+            postgresql_nulls_not_distinct=True,
+            postgresql_where=sa.text("collection_id IS NOT NULL"),
+        ),
+        sa.Index("ix_datasets_collection_folder", "collection_id", "folder_id"),
+        sa.Index("ix_datasets_store_schema_id", "store_schema_id"),
+        sa.CheckConstraint(
+            "folder_id IS NULL OR collection_id IS NOT NULL",
+            name="ck_datasets_folder_needs_collection",
+        ),
+        # A dataset in a collection always uses exactly one store entry (D5).
+        sa.CheckConstraint(
+            "(collection_id IS NULL) = (store_schema_id IS NULL)",
+            name="ck_datasets_store_schema_iff_collection",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, server_default=sa.text("gen_random_uuid()")
@@ -35,8 +65,8 @@ class Dataset(Base):
     # Nullable for backward compatibility with pre-GL-1-5 rows; no projects
     # table exists, so this is an external identifier, not a foreign key.
     project_id: Mapped[str | None] = mapped_column(sa.String(255), nullable=True)
-    # Unique (GL-3-15): a name identifies exactly one dataset, and is used
-    # unchanged as the snapshot key segment and the CLI's `name@vN` (design §6/§7).
+    # Unique within its parent (Phase 4, D2); addressed by path
+    # (`collection/folder/…/name`, or the bare name when unfiled).
     name: Mapped[str] = mapped_column(sa.String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(sa.Text(), nullable=True)
     feature_id: Mapped[str | None] = mapped_column(sa.String(255), nullable=True)
@@ -47,6 +77,23 @@ class Dataset(Base):
     )
     created_at: Mapped[datetime] = mapped_column(
         sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
+    )
+    # Phase 4 (D1): NULL collection_id means an unfiled dataset. Folder/collection
+    # consistency is enforced by the API, not by a foreign key.
+    collection_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        sa.ForeignKey("collections.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    folder_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        sa.ForeignKey("folders.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    store_schema_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        sa.ForeignKey("collection_schemas.id", ondelete="RESTRICT"),
+        nullable=True,
     )
 
 

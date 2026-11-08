@@ -580,3 +580,206 @@ button.danger-link {
 .token-status-expired {
   opacity: 0.6;
 }
+
+/* Phase 4: collections, schema editor, wizards */
+.stacked-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 8px 0;
+}
+
+.stacked-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.stacked-form label.checkbox-label {
+  flex-direction: row;
+  align-items: center;
+}
+
+.field-hint {
+  color: #6b7280;
+  font-size: 0.85rem;
+}
+
+.field-error {
+  color: #c0392b;
+}
+
+.inline-field {
+  display: flex;
+  gap: 8px;
+}
+
+.link-button {
+  background: none;
+  border: none;
+  padding: 0;
+  color: LinkText;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.breadcrumb {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: baseline;
+}
+
+.toolbar-actions,
+.folder-actions,
+.store-actions,
+.row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.page-toolbar h2 {
+  margin: 0;
+  font-size: 1.15rem;
+}
+
+.home-page section {
+  margin-bottom: 24px;
+}
+
+.collection-layout {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  gap: 16px;
+  align-items: start;
+}
+
+.folder-tree {
+  border-right: 1px solid #ccc;
+  padding-right: 12px;
+}
+
+.folder-tree ul {
+  list-style: none;
+  margin: 4px 0 4px 14px;
+  padding: 0;
+}
+
+.folder-tree .tree-active {
+  font-weight: 600;
+  text-decoration: underline;
+}
+
+.folder-actions {
+  margin-bottom: 12px;
+}
+
+.store-list {
+  list-style: none;
+  padding: 0;
+}
+
+.store-list > li {
+  border-bottom: 1px solid #ddd;
+  padding: 8px 0;
+}
+
+.store-entry-header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+}
+
+.store-used-by {
+  color: #6b7280;
+  flex: 1;
+}
+
+.store-pick {
+  list-style: none;
+  padding: 0;
+}
+
+.schema-table input:not([type='checkbox']),
+.schema-table select {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.schema-table textarea.json-editor {
+  width: 100%;
+  min-height: 60px;
+  box-sizing: border-box;
+}
+
+.schema-table tr.row-invalid td {
+  background: rgba(192, 57, 43, 0.08);
+}
+
+.schema-row-actions {
+  white-space: nowrap;
+}
+
+.option-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+}
+
+.chip {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+  border: 1px solid #c7d2fe;
+  border-radius: 10px;
+  padding: 0 6px;
+  font-size: 0.85rem;
+}
+
+.chip button {
+  border: none;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+  color: inherit;
+}
+
+.wizard-queue {
+  margin: 0 0 12px;
+  padding-left: 20px;
+  font-size: 0.9rem;
+}
+
+.wizard-queue .queue-active {
+  font-weight: 600;
+}
+
+.wizard-banner {
+  position: fixed;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 20;
+}
+
+.warning-list {
+  margin: 8px 0;
+  padding-left: 28px;
+}
+
+/* Wider dialogs when they hold a schema editor. */
+.import-wizard:has(.schema-editor) {
+  max-width: 1100px;
+}
+
+.schema-table td:first-child input {
+  min-width: 150px;
+}
+
+.schema-table td:nth-child(2) input {
+  min-width: 110px;
+}

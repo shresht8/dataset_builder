@@ -102,9 +102,9 @@ def test_cut_produces_three_files_at_right_key(client, as_role, dataset_id, stor
     assert body["created_by_email"] is not None
     assert body["content_hash"].startswith("sha256:")
 
-    rows_bytes = _get_object(storage_bucket, dataset_name, 1, "rows.jsonl")
-    schema_bytes = _get_object(storage_bucket, dataset_name, 1, "schema.json")
-    manifest_bytes = _get_object(storage_bucket, dataset_name, 1, "manifest.json")
+    rows_bytes = _get_object(storage_bucket, dataset_id, 1, "rows.jsonl")
+    schema_bytes = _get_object(storage_bucket, dataset_id, 1, "schema.json")
+    manifest_bytes = _get_object(storage_bucket, dataset_id, 1, "manifest.json")
 
     assert hashlib.sha256(rows_bytes).hexdigest() == body["content_hash"].removeprefix("sha256:")
 
@@ -113,6 +113,8 @@ def test_cut_produces_three_files_at_right_key(client, as_role, dataset_id, stor
 
     manifest = json.loads(manifest_bytes)
     assert manifest["dataset"] == dataset_name
+    assert manifest["dataset_id"] == str(dataset_id)
+    assert manifest["path"] == dataset_name
     assert manifest["version"] == 1
     assert manifest["content_hash"] == body["content_hash"]
     assert manifest["row_count"] == 1
@@ -278,13 +280,12 @@ def test_no_endpoint_mutates_or_deletes_a_version(client, as_role, dataset_id, s
     row = _create_row(client, dataset_id, {"input": "immutable", "score": 1})
 
     as_role("editor")
-    dataset_name = client.get(f"/v1/datasets/{dataset_id}").json()["name"]
     cut_resp = client.post(f"/v1/datasets/{dataset_id}/versions", json={"notes": "orig"})
     assert cut_resp.status_code == 201, cut_resp.text
     version_num = cut_resp.json()["version"]
 
-    before_manifest = _get_object(storage_bucket, dataset_name, version_num, "manifest.json")
-    before_rows = _get_object(storage_bucket, dataset_name, version_num, "rows.jsonl")
+    before_manifest = _get_object(storage_bucket, dataset_id, version_num, "manifest.json")
+    before_rows = _get_object(storage_bucket, dataset_id, version_num, "rows.jsonl")
 
     db = SessionLocal()
     try:
@@ -320,8 +321,8 @@ def test_no_endpoint_mutates_or_deletes_a_version(client, as_role, dataset_id, s
         headers={"If-Match": str(row["rev"])},
     )
 
-    after_manifest = _get_object(storage_bucket, dataset_name, version_num, "manifest.json")
-    after_rows = _get_object(storage_bucket, dataset_name, version_num, "rows.jsonl")
+    after_manifest = _get_object(storage_bucket, dataset_id, version_num, "manifest.json")
+    after_rows = _get_object(storage_bucket, dataset_id, version_num, "rows.jsonl")
     assert after_manifest == before_manifest
     assert after_rows == before_rows
 

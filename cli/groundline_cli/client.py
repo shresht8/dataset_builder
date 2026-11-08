@@ -1,9 +1,9 @@
 """Authenticated HTTP client for the Groundline API (§8).
 
 Sends the PAT as a bearer token and wraps the endpoints the CLI needs: list
-and create datasets, resolve a name to an id, get/put a schema, list rows,
-sync rows from a file, fetch a version's manifest/sidecar/rows, and fetch a
-diff. Every non-2xx response is turned into an
+and create datasets, resolve a path to a dataset, get/put a schema, list rows,
+sync rows from a file, fetch a version's manifest/sidecar/rows, fetch a diff,
+and (Phase 4) collections, folders, the schema store, moves and bundles. Every non-2xx response is turned into an
 `ApiError` with a clear, one-line message; callers print it and exit non-zero.
 """
 
@@ -69,23 +69,126 @@ class ApiClient:
             raise ApiError(f"API error {response.status_code}: {_detail(response)}")
         return response
 
-    def list_datasets(self) -> list[dict]:
-        return self._request("GET", "/datasets").json()
+    def list_datasets(self, collection_id: str | None = None) -> list[dict]:
+        params = {"collection_id": collection_id} if collection_id else None
+        return self._request("GET", "/datasets", params=params).json()
 
-    def resolve_dataset_id(self, name: str) -> str:
-        for dataset in self.list_datasets():
-            if dataset["name"] == name:
-                return dataset["id"]
-        raise ApiError(f"unknown dataset: '{name}'")
+    def resolve(self, path: str) -> dict:
+        """The dataset at `path` (`collection/folder/…/name`, or a bare unfiled name)."""
+        return self._request("GET", "/datasets/resolve", params={"path": path}).json()
+
+    def resolve_dataset_id(self, path: str) -> str:
+        return self.resolve(path)["id"]
+
+    def get_dataset(self, dataset_id: str) -> dict:
+        return self._request("GET", f"/datasets/{dataset_id}").json()
 
     def get_schema(self, dataset_id: str) -> dict:
         return self._request("GET", f"/datasets/{dataset_id}/schema").json()
 
-    def create_dataset(self, name: str, description: str | None = None) -> dict:
+    def create_dataset(
+        self,
+        name: str,
+        description: str | None = None,
+        *,
+        collection_id: str | None = None,
+        folder_id: str | None = None,
+        store_schema_id: str | None = None,
+        columns: list[dict] | None = None,
+    ) -> dict:
+        payload: dict = {"name": name}
+        if description is not None:
+            payload["description"] = description
+        for field, value in (
+            ("collection_id", collection_id),
+            ("folder_id", folder_id),
+            ("store_schema_id", store_schema_id),
+            ("columns", columns),
+        ):
+            if value is not None:
+                payload[field] = value
+        return self._request("POST", "/datasets", json=payload).json()
+
+    def move_dataset(self, dataset_id: str, collection_id: str | None, folder_id: str | None) -> dict:
+        return self._request(
+            "POST",
+            f"/datasets/{dataset_id}/move",
+            json={"collection_id": collection_id, "folder_id": folder_id},
+        ).json()
+
+    def apply_schema(self, dataset_id: str, store_schema_id: str) -> dict:
+        return self._request(
+            "POST", f"/datasets/{dataset_id}/schema/apply", json={"store_schema_id": store_schema_id}
+        ).json()
+
+    # --- Collections, folders, store (Phase 4) ---------------------------------
+
+    def list_collections(self) -> list[dict]:
+        return self._request("GET", "/collections").json()
+
+    def find_collection(self, name: str) -> dict:
+        for collection in self.list_collections():
+            if collection["name"] == name:
+                return collection
+        raise ApiError(f"unknown collection: '{name}'")
+
+    def get_collection(self, collection_id: str) -> dict:
+        return self._request("GET", f"/collections/{collection_id}").json()
+
+    def create_collection(self, name: str, description: str | None = None) -> dict:
         payload = {"name": name}
         if description is not None:
             payload["description"] = description
-        return self._request("POST", "/datasets", json=payload).json()
+        return self._request("POST", "/collections", json=payload).json()
+
+    def delete_collection(self, collection_id: str) -> None:
+        self._request("DELETE", f"/collections/{collection_id}")
+
+    def create_folder(self, collection_id: str, name: str, parent_id: str | None) -> dict:
+        return self._request(
+            "POST", f"/collections/{collection_id}/folders", json={"name": name, "parent_id": parent_id}
+        ).json()
+
+    def delete_folder(self, folder_id: str) -> None:
+        self._request("DELETE", f"/folders/{folder_id}")
+
+    def list_store(self, collection_id: str) -> list[dict]:
+        return self._request("GET", f"/collections/{collection_id}/schemas").json()
+
+    def find_store_entry(self, collection_id: str, name: str) -> dict:
+        for entry in self.list_store(collection_id):
+            if entry["name"] == name:
+                return entry
+        raise ApiError(f"unknown store schema: '{name}'")
+
+    def create_store_entry(self, collection_id: str, name: str, columns: list[dict]) -> dict:
+        return self._request(
+            "POST", f"/collections/{collection_id}/schemas", json={"name": name, "columns": columns}
+        ).json()
+
+    def update_store_entry(self, collection_id: str, entry_id: str, columns: list[dict]) -> dict:
+        return self._request(
+            "PUT", f"/collections/{collection_id}/schemas/{entry_id}", json={"columns": columns}
+        ).json()
+
+    def duplicate_store_entry(self, collection_id: str, entry_id: str, name: str) -> dict:
+        return self._request(
+            "POST", f"/collections/{collection_id}/schemas/{entry_id}/duplicate", json={"name": name}
+        ).json()
+
+    def delete_store_entry(self, collection_id: str, entry_id: str) -> None:
+        self._request("DELETE", f"/collections/{collection_id}/schemas/{entry_id}")
+
+    def export_collection(self, collection_id: str, source: str = "draft") -> bytes:
+        return self._request(
+            "GET", f"/collections/{collection_id}/export", params={"source": source}
+        ).content
+
+    def import_collection(self, content: bytes, *, preview: bool = False) -> dict:
+        path = "/collections/import/preview" if preview else "/collections/import"
+        return self._request(
+            "POST", path, files={"file": ("bundle.zip", content, "application/zip")}
+        ).json()
 
     def put_schema(self, dataset_id: str, columns: list[dict]) -> dict:
         return self._request(

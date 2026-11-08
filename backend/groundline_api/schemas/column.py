@@ -10,6 +10,8 @@ from __future__ import annotations
 from groundline_schema import Column
 from pydantic import BaseModel
 
+from groundline_api.schemas.dataset import StoreSchemaRef
+
 
 class SchemaUpdate(BaseModel):
     columns: list[Column]
@@ -17,3 +19,5 @@ class SchemaUpdate(BaseModel):
 
 class SchemaRead(BaseModel):
     columns: list[Column]
+    # Phase 4: the store entry a collection dataset uses (null when unfiled).
+    store_schema: StoreSchemaRef | None = None

@@ -13,7 +13,11 @@ from pydantic import BaseModel
 
 
 class Manifest(BaseModel):
-    dataset: str
+    dataset: str  # the dataset's name
+    # Phase 4 (C2): the dataset's ID and its path at cut time. Absent from
+    # manifests written before Phase 4.
+    dataset_id: str | None = None
+    path: str | None = None
     version: int
     content_hash: str  # "sha256:..."
     row_count: int

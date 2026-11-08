@@ -5,10 +5,11 @@
 // Editing follows the role (GL-3.5-14): viewers get no edit affordances, and
 // an existing row's key value can only be changed by editors and admins.
 // Editors can delete rows (soft) and, while it has no versions, the dataset
-// itself (GL-3.5-18).
+// itself (GL-3.5-18). Phase 4: a breadcrumb back to the dataset's collection
+// and folders, the Schema panel (GL-120) and moving the dataset (GL-119).
 import { createColumnHelper, flexRender, tableFeatures, useTable } from '@tanstack/react-table'
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
-import { Link, useNavigate, useParams } from 'react-router-dom'
+import { useNavigate, useParams } from 'react-router-dom'
 import {
   ApiError,
   createRow,
@@ -21,8 +22,10 @@ import {
   patchRow,
   type RowPatchPayload,
 } from '../api/client'
-import type { Column, Role, Row, User } from '../api/types'
+import type { Column, Dataset, Role, Row, User } from '../api/types'
 import { useAuth } from '../auth/AuthContext'
+import { DatasetBreadcrumb } from '../collections/DatasetBreadcrumb'
+import { MoveDialog } from '../collections/dialogs'
 import { CellDisplay, CellEditor, MultiSelectEditor } from './Cell'
 import { CommentsPanel } from './CommentsPanel'
 import { ConfirmDialog } from './ConfirmDialog'
@@ -32,6 +35,7 @@ import { ConflictDialog } from './ConflictDialog'
 import { DetailDrawer } from './DetailDrawer'
 import { FilterBar } from './FilterBar'
 import { ImportWizard } from './ImportWizard'
+import { SchemaPanel } from './SchemaPanel'
 import { VersionsPanel } from './VersionsPanel'
 import { AssigneeControl, StatusControl } from './Workflow'
 import {
@@ -144,6 +148,11 @@ export function DatasetPage() {
   const [versionsOpen, setVersionsOpen] = useState(false)
   const navigate = useNavigate()
   const [datasetName, setDatasetName] = useState<string | null>(null)
+  const [dataset, setDataset] = useState<Dataset | null>(null)
+  const [schemaOpen, setSchemaOpen] = useState(false)
+  const [moveOpen, setMoveOpen] = useState(false)
+  // Bumped after a schema change or a move, to refetch what they affect.
+  const [reloadKey, setReloadKey] = useState(0)
   // Versions pin a dataset: only one with none can be deleted (GL-3.5-18).
   const [versionCount, setVersionCount] = useState<number | null>(null)
   const [deleteDatasetOpen, setDeleteDatasetOpen] = useState(false)
@@ -155,14 +164,21 @@ export function DatasetPage() {
     getSchema(datasetId)
       .then((schema) => setColumns(schema.columns))
       .catch((err) => setLoadError(err instanceof ApiError ? err.message : 'Failed to load dataset'))
-  }, [datasetId])
+  }, [datasetId, reloadKey])
+
+  useEffect(() => {
+    if (!datasetId) return
+    getDataset(datasetId)
+      .then(setDataset)
+      .catch(() => setDataset(null))
+  }, [datasetId, reloadKey])
 
   useEffect(() => {
     if (!datasetId) return
     listRows(datasetId, { status: filters.status, assignee: filters.assignee, q: filters.q })
       .then(setRows)
       .catch((err) => setLoadError(err instanceof ApiError ? err.message : 'Failed to load dataset'))
-  }, [datasetId, filters.status, filters.assignee, filters.q])
+  }, [datasetId, filters.status, filters.assignee, filters.q, reloadKey])
 
   useEffect(() => {
     if (!datasetId) return
@@ -593,10 +609,18 @@ export function DatasetPage() {
   return (
     <div className="dataset-page">
       <div className="page-toolbar">
-        <Link to="/">&larr; Datasets</Link>
+        <DatasetBreadcrumb dataset={dataset} />
         {canImport && (
           <button type="button" onClick={() => setImportOpen(true)}>
             Import
+          </button>
+        )}
+        <button type="button" onClick={() => setSchemaOpen(true)} disabled={!dataset}>
+          Schema
+        </button>
+        {canImport && (
+          <button type="button" onClick={() => setMoveOpen(true)} disabled={!dataset}>
+            Move
           </button>
         )}
         <button type="button" onClick={() => setVersionsOpen(true)}>
@@ -793,6 +817,24 @@ export function DatasetPage() {
           name={datasetName}
           onDeleted={() => navigate('/')}
           onClose={() => setDeleteDatasetOpen(false)}
+        />
+      )}
+      {schemaOpen && dataset && (
+        <SchemaPanel
+          dataset={dataset}
+          canEdit={canImport}
+          onChanged={() => setReloadKey((k) => k + 1)}
+          onClose={() => setSchemaOpen(false)}
+        />
+      )}
+      {moveOpen && dataset && (
+        <MoveDialog
+          dataset={dataset}
+          onMoved={() => {
+            setMoveOpen(false)
+            setReloadKey((k) => k + 1)
+          }}
+          onClose={() => setMoveOpen(false)}
         />
       )}
       {versionsOpen && datasetId && (

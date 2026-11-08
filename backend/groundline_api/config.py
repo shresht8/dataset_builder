@@ -35,6 +35,9 @@ class Settings(BaseSettings):
     # GL-3.5-5: import upload cap (all formats) and the YAML alias-expansion cap.
     import_max_bytes: int = 50 * 1024 * 1024
     import_max_nodes: int = 1_000_000
+    # Phase 4 (GL-122): a collection bundle zip is capped at import_max_bytes;
+    # this caps the total size of the files inside it (zip-bomb guard).
+    bundle_max_uncompressed_bytes: int = 200 * 1024 * 1024
     # Signs session cookies (GL-1-9). The default is for local dev only.
     app_secret_key: str = "change-me"
 

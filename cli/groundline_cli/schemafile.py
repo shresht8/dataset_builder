@@ -9,120 +9,42 @@ A schema file is YAML (or JSON) holding the API's column list::
       required: true
       is_key: true
 
-`infer_columns` drafts one from records parsed by the shared reader, one
-column per flattened path in first-seen order:
-
-  - all booleans -> boolean; all numbers -> number;
-  - all strings -> date (all `YYYY-MM-DD`, once the type exists), long_text
-    (any newline or over 200 chars), else text;
-  - lists of strings -> multi_select (options: the distinct values seen);
-  - objects, lists of other values, mixed types -> json;
-  - only nulls seen -> text, flagged for review.
+`infer_columns` drafts one from records parsed by the shared reader. The
+inference rules live in `groundline_schema.infer` (GL-117), shared with
+`POST /v1/schema/infer`; this module renders and loads the YAML.
 """
 
 from __future__ import annotations
 
 import json
-import re
 from pathlib import Path
-from typing import Any
 
 import yaml
-from groundline_schema import Column, ColumnType
-from groundline_schema.paths import flatten
-from groundline_schema.records import to_json_value
+from groundline_schema import Column
+from groundline_schema.infer import NULLS_ONLY, InferError
+from groundline_schema.infer import infer_columns as _infer_columns
 from pydantic import ValidationError
 
-_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
-_HAS_DATE_TYPE = "date" in {member.value for member in ColumnType}
-_LONG_TEXT_CHARS = 200
-NULLS_ONLY = "only nulls seen - check type"
+__all__ = [
+    "NULLS_ONLY",
+    "SchemaFileError",
+    "infer_columns",
+    "load_schema_file",
+    "render_schema",
+    "wire_columns",
+]
 
 
 class SchemaFileError(Exception):
     """A user-facing problem with a schema file or an inference request."""
 
 
-def humanise(path: str) -> str:
-    """`expected.golden_response` -> "Golden response"."""
-    words = re.sub(r"[_\-]+", " ", path.split(".")[-1]).strip()
-    return words[:1].upper() + words[1:] if words else path
-
-
-def _typed(value: Any) -> Any:
-    try:
-        return to_json_value(value)
-    except ValueError:  # .inf / .nan: not JSON, so not a number either
-        return str(value)
-
-
-def _column_type(values: list[Any]) -> tuple[str, list[str] | None]:
-    if all(isinstance(v, bool) for v in values):
-        return "boolean", None
-    if all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in values):
-        return "number", None
-    if all(isinstance(v, str) for v in values):
-        if _HAS_DATE_TYPE and all(_DATE.fullmatch(v) for v in values):
-            return "date", None
-        if any("\n" in v or len(v) > _LONG_TEXT_CHARS for v in values):
-            return "long_text", None
-        return "text", None
-    if all(isinstance(v, list) and all(isinstance(i, str) for i in v) for v in values):
-        options = sorted({item for v in values for item in v})
-        if options:
-            return "multi_select", options
-    return "json", None
-
-
 def infer_columns(records: list[dict], key: str | None = None) -> tuple[list[dict], list[str]]:
-    """Draft columns for `records`. Returns (columns, warnings)."""
-    values_by_path: dict[str, list[Any]] = {}
-    present: dict[str, int] = {}
-    for record in records:
-        for path, value in flatten(record).items():
-            values_by_path.setdefault(path, [])
-            if value is not None:
-                values_by_path[path].append(_typed(value))
-                present[path] = present.get(path, 0) + 1
-
-    warnings: list[str] = []
-    if key is not None:
-        if key not in values_by_path:
-            raise SchemaFileError(f"--key '{key}' is not a field in the file")
-        if not _usable_key(values_by_path[key], present.get(key, 0), len(records)):
-            raise SchemaFileError(
-                f"--key '{key}' must be a non-empty, unique text value in every record"
-            )
-    elif "id" in values_by_path and _usable_key(
-        values_by_path["id"], present.get("id", 0), len(records)
-    ):
-        key = "id"
-    else:
-        warnings.append("no key column found: rows push needs one (use --key FIELD)")
-
-    columns: list[dict] = []
-    for path, values in values_by_path.items():
-        column: dict[str, Any] = {"key": path, "label": humanise(path)}
-        if path == key:
-            column.update(type="text", required=True, is_key=True)
-        elif not values:
-            column.update(type="text", required=False, _comment=NULLS_ONLY)
-        else:
-            column_type, options = _column_type(values)
-            column["type"] = column_type
-            if options is not None:
-                column["options"] = options
-            column["required"] = False
-        columns.append(column)
-    return columns, warnings
-
-
-def _usable_key(values: list[Any], present: int, total: int) -> bool:
-    return (
-        present == total
-        and all(isinstance(v, str) and v.strip() == v and v for v in values)
-        and len(set(values)) == len(values)
-    )
+    """Draft columns for `records` (shared rules). Returns (columns, warnings)."""
+    try:
+        return _infer_columns(records, key)
+    except InferError as exc:
+        raise SchemaFileError(str(exc)) from None
 
 
 def render_schema(columns: list[dict], header: str | None = None) -> str:
