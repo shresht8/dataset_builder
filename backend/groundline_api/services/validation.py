@@ -125,6 +125,20 @@ def row_errors(data: dict[str, Any], columns: list[DatasetColumn]) -> list[tuple
     return errors
 
 
+def describe_errors(errors: list[tuple[str, str]], limit: int = 3) -> str:
+    """Row errors as one plain sentence: at most `limit` problems, then "and N more" (GL-135)."""
+    shown = [
+        f"{key}: {'is required' if reason == 'required' else reason}" for key, reason in errors[:limit]
+    ]
+    more = len(errors) - limit
+    return "; ".join(shown) + (f"; and {more} more" if more > 0 else "")
+
+
+def row_label(row: Any) -> str:
+    """How a message names a row: its key value, else the start of its id."""
+    return f"Row '{row.row_key}'" if row.row_key else f"Row {str(row.id)[:8]}"
+
+
 def validate_row_data(data: dict[str, Any], columns: list[DatasetColumn]) -> None:
     """Raise a 422 with the first validation failure found, else return None."""
     errors = row_errors(data, columns)

@@ -25,11 +25,25 @@ from groundline_api.models.user import User
 from groundline_api.models.version import DatasetVersion
 from groundline_api.services import storage
 from groundline_api.services.paths import dataset_path
+from groundline_api.services.validation import describe_errors, row_errors, row_label
 
 
 class EmptySelectionError(Exception):
     """No rows matched the selection; a version can never be deleted, so an
     empty cut would be permanent (C3: the route turns this into a 422)."""
+
+
+class InvalidRowsError(Exception):
+    """Selected rows that break the schema; a version is permanent, so it isn't cut (GL-135)."""
+
+    def __init__(self, bad: list[tuple[str, list[tuple[str, str]]]], include_unapproved: bool) -> None:
+        shown = "; ".join(f"{label}: {describe_errors(errors)}" for label, errors in bad[:3])
+        more = len(bad) - 3
+        count = f"{len(bad)} selected row{'' if len(bad) == 1 else 's'} {'has' if len(bad) == 1 else 'have'} errors"
+        hint = "Fix them, or cut approved rows only." if include_unapproved else "Fix them first."
+        super().__init__(
+            f"{count}, so no version was cut. {shown}{f'; and {more} more rows' if more > 0 else ''}. {hint}"
+        )
 
 
 def _schema_columns(db: Session, dataset_id: uuid.UUID) -> list[Column]:
@@ -91,6 +105,12 @@ def cut_version(
 
     if not rows:
         raise EmptySelectionError()
+
+    # Every selected row must fit the schema: refuse before anything is written.
+    orm_columns = list(db.scalars(select(DatasetColumn).where(DatasetColumn.dataset_id == dataset_id)))
+    bad = [(row_label(row), errors) for row in rows if (errors := row_errors(row.data, orm_columns))]
+    if bad:
+        raise InvalidRowsError(bad, include_unapproved)
 
     rows_bytes = b"".join(_serialise_line(row, allowed_keys) for row in rows)
     content_hash = hashlib.sha256(rows_bytes).hexdigest()

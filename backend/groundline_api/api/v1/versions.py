@@ -27,7 +27,7 @@ from groundline_api.schemas.version import VersionCut, VersionDiff, VersionRead
 from groundline_api.services import diff as diff_service
 from groundline_api.services import export, storage
 from groundline_api.services.paths import dataset_path
-from groundline_api.services.versioning import EmptySelectionError, cut_version
+from groundline_api.services.versioning import EmptySelectionError, InvalidRowsError, cut_version
 
 router = APIRouter(prefix="/datasets", tags=["versions"])
 
@@ -89,6 +89,8 @@ def cut(
         )
     except EmptySelectionError:
         raise HTTPException(status_code=422, detail="no rows selected for this version")
+    except InvalidRowsError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     return _to_read(version, user.email, dataset_path(db, dataset))
 
 
