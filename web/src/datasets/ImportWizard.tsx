@@ -16,7 +16,14 @@
 // commit call.
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { ApiError, commitImport, previewImport } from '../api/client'
-import type { Column, ImportPreviewResponse, ImportSampleRow, ImportValidationError } from '../api/types'
+import type {
+  Column,
+  ImportPreviewResponse,
+  ImportSampleRow,
+  ImportValidationError,
+  ImportValidationReport,
+} from '../api/types'
+import { labelList, mappingCompat } from './compat'
 import { DateInput } from './Cell'
 import { formatJson, parseJsonText, summarizeJson } from './json'
 
@@ -186,6 +193,10 @@ export function ImportWizard({
   const [ignoredKeys, setIgnoredKeys] = useState<string[]>([])
   const [recordsKeyChoices, setRecordsKeyChoices] = useState<string[] | null>(null)
   const [totalRows, setTotalRows] = useState(0)
+  const [blankSkipped, setBlankSkipped] = useState(0)
+  const [report, setReport] = useState<ImportValidationReport | null>(null)
+  // The user ticked "import the valid rows anyway" on the wrong-schema banner.
+  const [confirmedAnyway, setConfirmedAnyway] = useState(false)
   const [validCount, setValidCount] = useState(0)
   const [errors, setErrors] = useState<ImportValidationError[]>([])
   const [fixes, setFixes] = useState<Record<number, Record<string, unknown>>>({})
@@ -200,11 +211,23 @@ export function ImportWizard({
   // Remounts the file input so the same file can be picked again after Back.
   const [uploadKey, setUploadKey] = useState(0)
 
+  const compat = mappingCompat(sourceColumns, mapping, activeColumns)
+  const mappingBlock =
+    compat.matched === 0
+      ? 'Map at least one column of the file to a schema column.'
+      : compat.requiredMissing.length > 0
+        ? `No column of the file is mapped to ${labelList(compat.requiredMissing)} (required). Map one, or change the schema first.`
+        : null
+  // Half or more of the checked rows fail: probably the wrong schema (GL-133).
+  const wrongSchema = !committed && report !== null && report.checked_rows > 0 && report.failed_rows * 2 >= report.checked_rows
+  const shownRows = new Set(errors.map((e) => e.row)).size
+
   function showPreview(preview: ImportPreviewResponse) {
     setSourceColumns(preview.columns)
     setMapping(preview.suggested_mapping)
     setSampleRows(preview.sample_rows)
     setTotalRows(preview.total_rows)
+    setBlankSkipped(preview.blank_skipped)
     setRecordsKey(preview.records_key ?? undefined)
     setIgnoredKeys(preview.ignored_keys ?? [])
     setRecordsKeyChoices(null)
@@ -263,6 +286,9 @@ export function ImportWizard({
       const preview = await previewImport(datasetId, file, mapping, recordsKey)
       setValidCount(preview.validation?.valid ?? 0)
       setErrors(preview.validation?.errors ?? [])
+      setReport(preview.validation)
+      setConfirmedAnyway(false)
+      setBlankSkipped(preview.blank_skipped)
       setStep('review')
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Could not validate mapping')
@@ -278,6 +304,8 @@ export function ImportWizard({
     setActiveSkip(new Set())
     setErrors([])
     setValidCount(0)
+    setReport(null)
+    setConfirmedAnyway(false)
     setError(null)
     setStep('mapping')
   }
@@ -290,6 +318,7 @@ export function ImportWizard({
     setSourceColumns([])
     setSampleRows([])
     setTotalRows(0)
+    setBlankSkipped(0)
     setFile(null)
     setError(null)
     setUploadKey((k) => k + 1)
@@ -445,8 +474,22 @@ export function ImportWizard({
                 })}
               </tbody>
             </table>
+            <div className="import-compat">
+              <p>
+                {compat.matched} of {compat.total} file column{compat.total === 1 ? '' : 's'} matched.
+              </p>
+              {compat.ignored.length > 0 && (
+                <p className="hint">Not imported (no column selected): {compat.ignored.join(', ')}</p>
+              )}
+              {compat.unfilled.length > 0 && (
+                <p className="hint">Schema columns left empty: {labelList(compat.unfilled)}</p>
+              )}
+              {mappingBlock && <p className="field-error">{mappingBlock}</p>}
+            </div>
             <p>
-              {totalRows} row{totalRows === 1 ? '' : 's'} detected. Preview of the first {sampleRows.length}:
+              {totalRows} row{totalRows === 1 ? '' : 's'} detected
+              {blankSkipped > 0 && ` (${blankSkipped} blank line${blankSkipped === 1 ? '' : 's'} will be skipped)`}.
+              Preview of the first {sampleRows.length}:
             </p>
             <div className="import-preview-scroll">
               <table className="import-table">
@@ -473,7 +516,7 @@ export function ImportWizard({
                 Back
               </button>
             )}{' '}
-            <button type="button" disabled={busy} onClick={() => void confirmMapping()}>
+            <button type="button" disabled={busy || mappingBlock !== null} onClick={() => void confirmMapping()}>
               Continue
             </button>
           </div>
@@ -494,8 +537,43 @@ export function ImportWizard({
               <>
                 <p>
                   {validCount} row{validCount === 1 ? '' : 's'} valid.
-                  {errors.length > 0 && ` ${errors.length} error${errors.length === 1 ? '' : 's'} to resolve.`}
+                  {errors.length > 0 &&
+                    ` ${committed || !report ? errors.length : report.error_total} error${(committed || !report ? errors.length : report.error_total) === 1 ? '' : 's'} to resolve.`}
+                  {blankSkipped > 0 && ` ${blankSkipped} blank line${blankSkipped === 1 ? '' : 's'} skipped.`}
                 </p>
+                {wrongSchema && report && (
+                  <div className="notice warning-list" role="alert">
+                    <p>
+                      This looks like the wrong schema: {report.failed_rows} of {report.checked_rows} rows fail
+                      validation. Go back to change the mapping, choose another file, or close this window. The schema
+                      of an empty dataset can be changed from its Schema tab.
+                    </p>
+                    <label>
+                      <input
+                        type="checkbox"
+                        checked={confirmedAnyway}
+                        onChange={(event) => setConfirmedAnyway(event.target.checked)}
+                      />{' '}
+                      Import the valid rows anyway
+                    </label>
+                  </div>
+                )}
+                {!committed && report && report.by_column.length > 0 && (
+                  <ul className="import-by-column">
+                    {report.by_column.map((c) => (
+                      <li key={c.column}>
+                        {columnsByKey.get(c.column)?.label ?? (c.column || 'Whole record')}: {c.rows} of{' '}
+                        {report.checked_rows} row{report.checked_rows === 1 ? '' : 's'}, {c.reason}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {!committed && report && report.failed_rows > shownRows && (
+                  <p className="hint">
+                    Showing the first {shownRows} of {report.failed_rows} rows with errors. Fix or skip these and import;
+                    the rest are listed afterwards.
+                  </p>
+                )}
                 {errors.length > 0 && (
                   <table className="import-table">
                     <thead>
@@ -549,7 +627,11 @@ export function ImportWizard({
                     </button>{' '}
                   </>
                 )}
-                <button type="button" disabled={busy} onClick={() => void confirmImport()}>
+                <button
+                  type="button"
+                  disabled={busy || (wrongSchema && !confirmedAnyway)}
+                  onClick={() => void confirmImport()}
+                >
                   {errors.length > 0 ? 'Fix/skip and import' : 'Confirm import'}
                 </button>
               </>

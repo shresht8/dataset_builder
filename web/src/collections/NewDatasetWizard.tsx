@@ -22,6 +22,7 @@ import {
 } from '../api/client'
 import type { Column, CollectionTree, Dataset, StoreEntry } from '../api/types'
 import { ConfirmDialog } from '../datasets/ConfirmDialog'
+import { fileCompat, labelList } from '../datasets/compat'
 import { ImportWizard, RECORDS_LIST_QUESTION } from '../datasets/ImportWizard'
 import { SchemaEditor, columnProblems, toEditable, toInput, type EditableColumn } from '../schema/SchemaEditor'
 import { Dialog, errorMessage, folderOptions } from './dialogs'
@@ -40,6 +41,27 @@ interface QueueItem {
 type Step = 'files' | 'details' | 'schema' | 'import' | 'summary'
 
 /** `My File (2).CSV` -> `my-file-2`: fits ^[a-z0-9][a-z0-9_-]{0,99}$. */
+/** Hint before "Create dataset": how the file's columns fit the picked schema. The import
+ * itself (API) stays the hard check; inferred names can differ from what it will see. */
+function SchemaFit({ fileColumns, schema }: { fileColumns: string[]; schema: StoreEntry }) {
+  if (fileColumns.length === 0) return null
+  const fit = fileCompat(fileColumns, schema.columns)
+  const bad = fit.matched === 0 || fit.requiredMissing.length > 0
+  return (
+    <div className={bad ? 'notice warning-list' : 'field-hint'}>
+      <p>
+        {fit.matched} of {fit.total} file column{fit.total === 1 ? '' : 's'} match this schema.
+      </p>
+      {fit.matched === 0 && <p>None match: importing this file with this schema would be refused.</p>}
+      {fit.requiredMissing.length > 0 && (
+        <p>No file column matches the required {labelList(fit.requiredMissing)}: the import would be refused.</p>
+      )}
+      {fit.ignored.length > 0 && <p>Not imported: {fit.ignored.join(', ')}</p>}
+      {fit.unfilled.length > 0 && <p>Left empty: {labelList(fit.unfilled)}</p>}
+    </div>
+  )
+}
+
 export function nameFromFile(fileName: string): string {
   const stem = fileName.replace(/\.[^.]+$/, '').toLowerCase()
   const cleaned = stem.replace(/[^a-z0-9_-]+/g, '-').replace(/^[-_]+/, '').replace(/-+$/, '')
@@ -75,6 +97,8 @@ export function NewDatasetWizard({ collection, initialFolderId = null, onClose, 
   const [tab, setTab] = useState<'infer' | 'store'>('infer')
   const [columns, setColumns] = useState<EditableColumn[]>([])
   const [warnings, setWarnings] = useState<string[]>([])
+  // Column names inferred from the file, for the "does it fit the picked schema" hint.
+  const [fileColumns, setFileColumns] = useState<string[]>([])
   const [recordCount, setRecordCount] = useState<number | null>(null)
   const [entries, setEntries] = useState<StoreEntry[]>([])
   const [picked, setPicked] = useState<StoreEntry | null>(null)
@@ -101,6 +125,7 @@ export function NewDatasetWizard({ collection, initialFolderId = null, onClose, 
     setTab('infer')
     setColumns([])
     setWarnings([])
+    setFileColumns([])
     setRecordCount(null)
     setPicked(null)
     setEditingCopy(false)
@@ -126,6 +151,7 @@ export function NewDatasetWizard({ collection, initialFolderId = null, onClose, 
       const result = await inferSchema(item.file, key)
       setColumns(toEditable(result.columns))
       setWarnings(result.warnings)
+      setFileColumns(result.columns.map((c) => c.key))
       setRecordCount(result.record_count)
       setKeyChoices(null)
     } catch (err) {
@@ -417,6 +443,7 @@ export function NewDatasetWizard({ collection, initialFolderId = null, onClose, 
               </ul>
               {picked && !editingCopy && (
                 <>
+                  <SchemaFit fileColumns={fileColumns} schema={picked} />
                   <SchemaEditor columns={toEditable(picked.columns)} />
                   <button
                     type="button"
