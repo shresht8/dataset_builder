@@ -17,6 +17,22 @@ class SchemaUpdate(BaseModel):
     columns: list[Column]
 
 
+class SchemaProblem(BaseModel):
+    column: str
+    kind: str  # "required" | "type"
+    rows: int
+    examples: list[str]
+    readded: bool
+
+
+class SchemaDryRun(BaseModel):
+    """`?dry_run=true`: what the change would do; nothing was written."""
+
+    ok: bool
+    detail: str | None = None  # the message a real write would be refused with
+    problems: list[SchemaProblem] = []
+
+
 class SchemaRead(BaseModel):
     columns: list[Column]
     # Phase 4: the store entry a collection dataset uses (null when unfiled).

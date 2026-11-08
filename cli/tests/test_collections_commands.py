@@ -42,6 +42,7 @@ class FakeApi:
         self.sync_overrides: dict[str, dict] = {}
         self.imported: list[bytes] = []
         self.extra = None  # an extra handler tried first (returns None to fall through)
+        self.dry_run: dict = {"ok": True}  # what a schema write with ?dry_run=true answers (GL-134)
         self._n = 0
 
     def _id(self, prefix: str) -> str:
@@ -217,6 +218,10 @@ class FakeApi:
                 return httpx.Response(200, json=self.read(d))
             if rest == "/schema" and m == "GET":
                 return httpx.Response(200, json={"columns": d["columns"], "store_schema": self._ref(d)})
+            if rest == "/schema" and m == "PUT" and request.url.params.get("dry_run"):
+                return httpx.Response(200, json=self.dry_run)
+            if rest == "/schema/apply" and request.url.params.get("dry_run"):
+                return httpx.Response(200, json=self.dry_run)
             if rest == "/schema" and m == "PUT":
                 created = False
                 if d["collection_id"]:
@@ -257,7 +262,11 @@ class FakeApi:
         return httpx.Response(404, json={"detail": f"not found: {m} {p}"})
 
     def calls(self, method: str, pattern: str) -> list[httpx.Request]:
-        return [r for r in self.requests if r.method == method and re.fullmatch(pattern, r.url.path)]
+        """Real calls; a dry run (`?dry_run=true` on a schema write) is not one."""
+        return [
+            r for r in self.requests
+            if r.method == method and re.fullmatch(pattern, r.url.path) and not r.url.params.get("dry_run")
+        ]
 
     def export(self, cid: str) -> bytes:
         c = self.collections[cid]
@@ -402,6 +411,23 @@ def test_schema_push_reports_store_outcome_and_apply(fake, tmp_path):
     result = _run("schema", "apply", "loose", "train")
     assert result.exit_code == 1 and "not in a collection" in result.output
     assert loose["store_schema_id"] is None
+
+
+def test_schema_apply_dry_run_and_refusal(fake):
+    c = fake.add_collection("evals")
+    entry = fake.add_entry(c["id"], "train", KEYED)
+    fake.add_entry(c["id"], "wide", KEYED + [{"key": "n", "label": "N", "type": "number", "required": False}])
+    ds = fake.add_dataset("train", c["id"], sid=entry["id"])
+
+    result = _run("schema", "apply", "evals/train", "wide", "--dry-run")
+    assert result.exit_code == 0 and "ok: no stored row would break" in result.output
+    assert ds["store_schema_id"] == entry["id"]
+    assert not fake.calls("POST", r"/v1/datasets/d\d+/schema/apply")
+
+    fake.dry_run = {"ok": False, "detail": "Column 'n' would be required but has no value in 2 rows"}
+    result = _run("schema", "apply", "evals/train", "wide", "--yes")
+    assert result.exit_code == 1 and "Column 'n' would be required" in result.output
+    assert not fake.calls("POST", r"/v1/datasets/d\d+/schema/apply")
 
 
 # --- lock ---------------------------------------------------------------------------
