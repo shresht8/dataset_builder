@@ -29,6 +29,9 @@ function showValue(value: unknown): string {
   return String(value)
 }
 
+// Shown instead of the API's "choose a records_key" message (GL-132).
+export const RECORDS_LIST_QUESTION = 'This file has more than one list. Which one holds your data?'
+
 function candidatesOf(err: unknown): string[] | null {
   if (!(err instanceof ApiError) || err.status !== 422) return null
   const body = err.body as { records_key_candidates?: unknown } | null
@@ -192,6 +195,10 @@ export function ImportWizard({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [done, setDone] = useState(false)
+  // True once a commit round succeeded: rows exist, so Back is no longer safe.
+  const [committed, setCommitted] = useState(false)
+  // Remounts the file input so the same file can be picked again after Back.
+  const [uploadKey, setUploadKey] = useState(0)
 
   function showPreview(preview: ImportPreviewResponse) {
     setSourceColumns(preview.columns)
@@ -212,8 +219,12 @@ export function ImportWizard({
       showPreview(await previewImport(datasetId, chosen, undefined, key))
     } catch (err) {
       const candidates = candidatesOf(err)
-      if (candidates && candidates.length > 0) setRecordsKeyChoices(candidates)
-      setError(err instanceof ApiError ? err.message : 'Could not read file')
+      if (candidates && candidates.length > 0) {
+        setRecordsKeyChoices(candidates)
+        setError(RECORDS_LIST_QUESTION)
+      } else {
+        setError(err instanceof ApiError ? err.message : 'Could not read file')
+      }
     } finally {
       setBusy(false)
     }
@@ -260,6 +271,31 @@ export function ImportWizard({
     }
   }
 
+  // Back clears what depends on the later step. A leftover fix would replace
+  // the file's value for that row and column under a different mapping.
+  function backToMapping() {
+    setFixes({})
+    setActiveSkip(new Set())
+    setErrors([])
+    setValidCount(0)
+    setError(null)
+    setStep('mapping')
+  }
+
+  function backToUpload() {
+    setMapping({})
+    setRecordsKey(undefined)
+    setRecordsKeyChoices(null)
+    setIgnoredKeys([])
+    setSourceColumns([])
+    setSampleRows([])
+    setTotalRows(0)
+    setFile(null)
+    setError(null)
+    setUploadKey((k) => k + 1)
+    setStep('upload')
+  }
+
   function setFix(row: number, colKey: string, value: unknown) {
     setFixes((prev) => ({ ...prev, [row]: { ...prev[row], [colKey]: value } }))
   }
@@ -285,6 +321,7 @@ export function ImportWizard({
       for (let row = 1; row <= totalRows; row += 1) {
         if (!effectiveSkip.has(row) && !remainingRows.has(row)) importedThisRound.add(row)
       }
+      setCommitted(true)
       setHandledRows(new Set([...effectiveSkip, ...importedThisRound]))
       setActiveSkip(new Set())
       setFixes((prev) => {
@@ -330,6 +367,7 @@ export function ImportWizard({
           <div>
             <p>Upload a CSV, XLSX, JSON, JSONL or YAML file to import rows.</p>
             <input
+              key={uploadKey}
               type="file"
               accept={ACCEPTED}
               disabled={busy}
@@ -340,7 +378,7 @@ export function ImportWizard({
             />
             {recordsKeyChoices && file && (
               <label className="records-key-choice">
-                Which list holds the records?{' '}
+                Which list holds your data?{' '}
                 <select
                   value=""
                   disabled={busy}
@@ -430,6 +468,11 @@ export function ImportWizard({
                 </tbody>
               </table>
             </div>
+            {!initialFile && (
+              <button type="button" disabled={busy} onClick={backToUpload}>
+                Back
+              </button>
+            )}{' '}
             <button type="button" disabled={busy} onClick={() => void confirmMapping()}>
               Continue
             </button>
@@ -498,6 +541,13 @@ export function ImportWizard({
                       })}
                     </tbody>
                   </table>
+                )}
+                {!committed && (
+                  <>
+                    <button type="button" disabled={busy} onClick={backToMapping}>
+                      Back
+                    </button>{' '}
+                  </>
                 )}
                 <button type="button" disabled={busy} onClick={() => void confirmImport()}>
                   {errors.length > 0 ? 'Fix/skip and import' : 'Confirm import'}

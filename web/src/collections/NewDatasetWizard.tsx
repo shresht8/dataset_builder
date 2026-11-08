@@ -22,7 +22,7 @@ import {
 } from '../api/client'
 import type { Column, CollectionTree, Dataset, StoreEntry } from '../api/types'
 import { ConfirmDialog } from '../datasets/ConfirmDialog'
-import { ImportWizard } from '../datasets/ImportWizard'
+import { ImportWizard, RECORDS_LIST_QUESTION } from '../datasets/ImportWizard'
 import { SchemaEditor, columnProblems, toEditable, toInput, type EditableColumn } from '../schema/SchemaEditor'
 import { Dialog, errorMessage, folderOptions } from './dialogs'
 
@@ -130,8 +130,12 @@ export function NewDatasetWizard({ collection, initialFolderId = null, onClose, 
       setKeyChoices(null)
     } catch (err) {
       const candidates = candidatesOf(err)
-      if (candidates && candidates.length > 0) setKeyChoices(candidates)
-      setError(errorMessage(err, 'Could not read the file'))
+      if (candidates && candidates.length > 0) {
+        setKeyChoices(candidates)
+        setError(RECORDS_LIST_QUESTION)
+      } else {
+        setError(errorMessage(err, 'Could not read the file'))
+      }
     } finally {
       setBusy(false)
     }
@@ -351,7 +355,7 @@ export function NewDatasetWizard({ collection, initialFolderId = null, onClose, 
 
           {keyChoices && (
             <label className="records-key-choice">
-              Which list holds the records?{' '}
+              Which list holds your data?{' '}
               <select
                 value=""
                 onChange={(event) => {
