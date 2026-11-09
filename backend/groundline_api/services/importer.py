@@ -129,16 +129,58 @@ def parse_upload(
     A CSV uses `delimiter` when given (one of CSV_DELIMITERS), else the detected one.
     """
     lower = filename.lower()
-    if lower.endswith(".csv"):
-        return _parse_csv(content, delimiter)
-    if lower.endswith(".xlsx"):
-        return _parse_xlsx(content)
+    if lower.endswith((".csv", ".xlsx")):
+        source = _parse_csv(content, delimiter) if lower.endswith(".csv") else _parse_xlsx(content)
+        problem = header_problem(source.header)
+        if problem:
+            raise ImportRequestError(problem)
+        return source
     if lower.endswith(STRUCTURED_SUFFIXES):
         return _parse_structured(filename, content, columns or [], records_key)
     raise ImportRequestError(
         f"unsupported file type: {filename!r} "
         "(expected .csv, .xlsx, .json, .jsonl, .ndjson, .yaml or .yml)"
     )
+
+
+EMPTY_FILE = "this file is empty: it has no header row and no data. Choose another file"
+TITLE_ROWS_HINT = "If the file starts with title rows above the header, delete them"
+
+
+def unnamed_column(position: int) -> str:
+    return (
+        f"column {position} has no name. Name it in the file's first row, or remove the"
+        f" column. {TITLE_ROWS_HINT}"
+    )
+
+
+def header_problem(header: list[str]) -> str | None:
+    """CSV/XLSX header problems that would lose data (GL-147), or None.
+
+    An empty file; a nameless cell before the last named one; a repeated name
+    (each row is read into a dict, so the later column would replace the earlier
+    one). Nameless cells after the last name are left to the caller.
+    """
+    named = [i for i, name in enumerate(header) if name.strip()]
+    if not named:
+        return EMPTY_FILE
+    problems: list[str] = []
+    gaps = [i + 1 for i in range(named[-1]) if not header[i].strip()]
+    if gaps:
+        problems.append(unnamed_column(gaps[0]))
+    seen: set[str] = set()
+    repeated: list[str] = []
+    for name in header:
+        if name.strip() and name in seen and name not in repeated:
+            repeated.append(name)
+        seen.add(name)
+    if repeated:
+        names = ", ".join(f'"{name}"' for name in repeated)
+        problems.append(
+            f"the column name {names} is used more than once."
+            " Give each column its own name in the file's first row"
+        )
+    return "; ".join(problems) if problems else None
 
 
 def detect_delimiter(text: str) -> str:

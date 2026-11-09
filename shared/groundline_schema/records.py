@@ -170,7 +170,10 @@ def _json_document(text: str) -> Any:
             raise RecordsError(
                 "this looks like JSON Lines (one object per line) — save it as .jsonl"
             ) from None
-        raise RecordsError(f"invalid JSON: {exc}") from None
+        raise RecordsError(
+            f"this file is not valid JSON: the problem is at line {exc.lineno},"
+            f" column {exc.colno}. Check for a missing comma, bracket or quote there"
+        ) from None
     except ValueError as exc:
         raise RecordsError(str(exc)) from None
 
@@ -182,8 +185,15 @@ def _jsonl_records(text: str) -> list[Any]:
             continue
         try:
             records.append(_json_loads(line))
-        except ValueError as exc:  # JSONDecodeError or a NaN/Infinity constant
-            records.append(RecordProblem(f"line {line_number}: invalid JSON ({exc})"))
+        except json.JSONDecodeError as exc:
+            records.append(
+                RecordProblem(
+                    f"line {line_number}: not valid JSON at column {exc.colno}."
+                    " Each line must be one complete JSON object"
+                )
+            )
+        except ValueError as exc:  # a NaN/Infinity constant
+            records.append(RecordProblem(f"line {line_number}: {exc}"))
     return records
 
 
@@ -284,6 +294,12 @@ def _is_groundline_line(record: Any) -> bool:
     )
 
 
+NOT_RECORDS = (
+    "this file is one object, not a list of records. Wrap it in [ ] to make a list,"
+    " or save it as JSONL with one record per line"
+)
+
+
 def _find_records(doc: Any, records_key: str | None) -> tuple[list, str | None, list[str]]:
     if doc is None:
         return [], None, []
@@ -307,11 +323,15 @@ def _find_records(doc: Any, records_key: str | None) -> tuple[list, str | None, 
         object_lists = [
             key for key in list_keys if all(isinstance(item, dict) for item in doc[key])
         ]
-        if len(object_lists) != 1:
+        if not object_lists:
+            # One object, not records (GL-147): a config or API response is the
+            # likely case, so it is refused rather than read as one record.
+            raise RecordsError(NOT_RECORDS)
+        if len(object_lists) > 1:
             raise RecordsError(
                 "can't tell which key holds the records — choose a records_key"
-                + (f" (lists found: {', '.join(list_keys)})" if list_keys else ""),
-                candidates=list_keys,
+                f" (lists found: {', '.join(object_lists)})",
+                candidates=object_lists,
             )
         chosen = object_lists[0]
     return doc[chosen], chosen, [key for key in doc if key != chosen]

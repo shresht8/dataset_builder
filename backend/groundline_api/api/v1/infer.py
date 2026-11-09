@@ -23,7 +23,7 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
-from groundline_schema.infer import NO_KEY, InferError, infer_columns
+from groundline_schema.infer import NO_KEY, InferError, humanise, infer_columns
 from groundline_schema.paths import PathError
 from groundline_schema.records import (
     STRUCTURED_SUFFIXES,
@@ -45,6 +45,10 @@ WEB_NO_KEY = (
     " imports can tell new rows from existing ones. Tick Key column on a column whose"
     " values are all different and never empty."
 )
+HEADER_ONLY = (
+    "This file has a header but no rows, so every column is drafted as text."
+    " Set the types before creating."
+)
 
 
 def _cell(value: Any) -> Any:
@@ -61,14 +65,15 @@ def _cell(value: Any) -> Any:
 
 def _records(
     filename: str, content: bytes, records_key: str | None, delimiter: str | None
-) -> tuple[list[dict], str | None]:
-    """The file's records, and the CSV delimiter used (None for other formats)."""
+) -> tuple[list[dict], str | None, list[str]]:
+    """The file's records, the CSV delimiter used (None for other formats), and the
+    CSV/XLSX column names (empty for other formats)."""
     if filename.lower().endswith(STRUCTURED_SUFFIXES):
         try:
             parsed = parse_records(filename, content, records_key, settings.import_max_nodes)
         except RecordsError as exc:
             raise ImportProblem(str(exc), exc.candidates) from None
-        return [r for r in parsed.records if not isinstance(r, RecordProblem)], None
+        return [r for r in parsed.records if not isinstance(r, RecordProblem)], None, []
     try:
         source = importer.parse_upload(filename, content, None, records_key, delimiter)
     except importer.ImportRequestError as exc:
@@ -79,7 +84,16 @@ def _records(
         for row in source.rows
         if not isinstance(row, RecordProblem) and not importer.is_blank_line(source, row)
     ]
-    return records, source.delimiter
+    # Nameless header cells after the last name (GL-147): data under them means
+    # a missing name, or title rows above the header; otherwise drop them.
+    named = [name for name in source.header if name.strip()]
+    blank = {name for name in source.header if not name.strip()}
+    if blank:
+        if any(record.get(name) is not None for record in records for name in blank):
+            last = max(i for i, name in enumerate(source.header) if name.strip())
+            raise ImportProblem(importer.unnamed_column(last + 2), None)
+        records = [{k: v for k, v in record.items() if k not in blank} for record in records]
+    return records, source.delimiter, named
 
 
 @router.post("/infer", response_model=None)
@@ -98,9 +112,23 @@ async def infer_schema(
             detail=f"file is larger than the import limit of {limit // (1024 * 1024)} MB",
         )
     try:
-        records, used_delimiter = _records(file.filename or "", content, records_key, delimiter)
+        records, used_delimiter, header = _records(
+            file.filename or "", content, records_key, delimiter
+        )
     except ImportProblem as exc:
         return problem_response(exc)
+    if not records and header:
+        # Header only (GL-147): text columns from the header, so an empty
+        # dataset can still be created.
+        return {
+            "columns": [
+                {"key": name, "label": humanise(name), "type": "text", "required": False}
+                for name in header
+            ],
+            "warnings": [HEADER_ONLY, WEB_NO_KEY],
+            "record_count": 0,
+            "delimiter": used_delimiter,
+        }
     try:
         drafted, warnings = infer_columns(records, key or None)
     except (InferError, PathError) as exc:

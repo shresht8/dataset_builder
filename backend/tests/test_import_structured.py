@@ -406,7 +406,7 @@ def test_malformed_jsonl_line_and_non_object_are_row_errors(client, simple_datas
     result = _commit(client, simple_dataset, "x.jsonl", content, MAPPING).json()
     assert result["imported"] == 2
     reasons = {e["row"]: e["reason"] for e in result["errors"]}
-    assert reasons[2].startswith("line 3: invalid JSON")
+    assert reasons[2].startswith("line 3: not valid JSON at column")
     assert reasons[3] == "record is not an object"
 
 

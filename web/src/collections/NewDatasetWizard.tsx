@@ -240,8 +240,14 @@ export function NewDatasetWizard({ collection, initialFolderId = null, onClose, 
       } else {
         setOutcome(`Created ${dataset.path}`)
       }
-      setImportColumns((await getSchema(dataset.id)).columns)
       onChanged()
+      if (recordCount === 0) {
+        // Header only (GL-147): nothing to import, so the dataset is done empty.
+        patchItem({ dataset, status: 'imported', note: 'created empty: the file has no rows' })
+        advance()
+        return
+      }
+      setImportColumns((await getSchema(dataset.id)).columns)
       setStep('import')
     } catch (err) {
       setError(errorMessage(err, 'Create failed'))
