@@ -67,10 +67,11 @@ def _records(
         source = importer.parse_upload(filename, content, None, records_key, delimiter)
     except importer.ImportRequestError as exc:
         raise ImportProblem(str(exc), exc.candidates) from None
+    # Blank lines are skipped, as import skips them (GL-146).
     records = [
         {k: _cell(v) for k, v in row.items()}
         for row in source.rows
-        if not isinstance(row, RecordProblem)
+        if not isinstance(row, RecordProblem) and not importer.is_blank_line(source, row)
     ]
     return records, source.delimiter
 

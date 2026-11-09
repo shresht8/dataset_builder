@@ -112,6 +112,9 @@ class ParsedSource:
     records_key: str | None = None
     ignored_keys: list[str] = field(default_factory=list)
     delimiter: str | None = None  # CSV only: the one used
+    # CSV/XLSX: indices of rows with non-empty cells past the header, filled
+    # while `rows` is iterated (GL-146).
+    extra_cell_rows: list[int] = field(default_factory=list)
 
 
 def parse_upload(
@@ -179,11 +182,15 @@ def _parse_csv(content: bytes, delimiter: str | None = None) -> ParsedSource:
     except StopIteration:
         header = []
 
+    source = ParsedSource(header=header, rows=iter(()), delimiter=delimiter)
+
     def rows() -> Iterator[dict[str, Any]]:
-        for raw_row in reader:
+        for index, raw_row in enumerate(reader, start=1):
+            _note_extra_cells(source, index, raw_row, len(header))
             yield _cells(header, raw_row)
 
-    return ParsedSource(header=header, rows=rows(), delimiter=delimiter)
+    source.rows = rows()
+    return source
 
 
 def _parse_xlsx(content: bytes) -> ParsedSource:
@@ -196,12 +203,19 @@ def _parse_xlsx(content: bytes) -> ParsedSource:
             "could not read the workbook — is it a valid, unencrypted .xlsx file?"
         ) from None
     header = [] if first is None else ["" if cell is None else str(cell) for cell in first]
+    # Sheet rows are as wide as the sheet, so cells past the header sit under
+    # blank header cells: the header ends at its last named cell.
+    width = max((i + 1 for i, name in enumerate(header) if name.strip()), default=0)
+    source = ParsedSource(header=header, rows=iter(()))
 
     def rows() -> Iterator[dict[str, Any]]:
-        for raw_row in row_iter:
-            yield _cells(header, [_xlsx_cell(cell) for cell in raw_row])
+        for index, raw_row in enumerate(row_iter, start=1):
+            cells = [_xlsx_cell(cell) for cell in raw_row]
+            _note_extra_cells(source, index, cells, width)
+            yield _cells(header, cells)
 
-    return ParsedSource(header=header, rows=rows())
+    source.rows = rows()
+    return source
 
 
 def _xlsx_cell(cell: Any) -> Any:
@@ -212,6 +226,11 @@ def _xlsx_cell(cell: Any) -> Any:
     if isinstance(cell, (dt.date, dt.time, dt.timedelta)):
         return cell
     return str(cell)
+
+
+def _note_extra_cells(source: ParsedSource, index: int, raw_row: list[Any], width: int) -> None:
+    if any(_has_value(cell) for cell in raw_row[width:]):
+        source.extra_cell_rows.append(index)
 
 
 def _cells(header: list[str], raw_row: list[Any]) -> dict[str, Any]:
@@ -460,6 +479,45 @@ class _KeyCheck:
         return []
 
 
+ID_COLUMN = "id"
+WARNING_EXAMPLES = 5
+
+
+@dataclass
+class _IdCheck:
+    """Without a key column, a mapped source `id` that repeats or is empty (GL-146).
+
+    A warning, not a row error: those rows still import.
+    """
+
+    seen: set[str] = field(default_factory=set)
+    repeated: list[str] = field(default_factory=list)
+    repeated_rows: int = 0
+    missing_rows: int = 0
+
+    def add(self, values: dict[str, Any]) -> None:
+        value = values.get(ID_COLUMN)
+        if not _has_value(value):
+            self.missing_rows += 1
+            return
+        text = str(value)
+        if text in self.seen:
+            self.repeated_rows += 1
+            if text not in self.repeated:
+                self.repeated.append(text)
+        self.seen.add(text)
+
+    def report(self) -> dict[str, Any] | None:
+        if self.repeated_rows == 0 and self.missing_rows == 0:
+            return None
+        return {
+            "column": ID_COLUMN,
+            "repeated": self.repeated[:WARNING_EXAMPLES],
+            "repeated_rows": self.repeated_rows,
+            "missing_rows": self.missing_rows,
+        }
+
+
 def _validate_row(
     index: int,
     values: dict[str, Any] | RecordProblem,
@@ -504,10 +562,16 @@ def preview(
     out). total_rows counts blank CSV/XLSX lines too, so indices stay positions in
     the file. validation is `None` if no mapping was supplied, else the report:
     `valid`, at most ERROR_ROWS_SHOWN rows' worth of `errors`, and exact totals
-    (`error_total`, `failed_rows`, `checked_rows`, `by_column`).
+    (`error_total`, `failed_rows`, `checked_rows`, `by_column`), plus the warnings
+    `extra_cells` and `id_check` (None when there is nothing to warn about).
     """
     columns_by_key = {col.key: col for col in columns}
     keys = _KeyCheck(key_column(columns), existing_keys or set())
+    id_check = (
+        _IdCheck()
+        if mapping is not None and keys.column is None and ID_COLUMN in mapping
+        else None
+    )
     sample: list[dict[str, Any]] = []
     total = 0
     blank = 0
@@ -527,6 +591,8 @@ def preview(
             sample.append({"row": index, "values": _sample_values(values)})
         if mapping is None:
             continue
+        if id_check is not None and not isinstance(values, RecordProblem):
+            id_check.add(values)
         _, failures = _validate_row(
             index, values, mapping, columns, columns_by_key, source.structured, {}, keys
         )
@@ -553,6 +619,15 @@ def preview(
             "failed_rows": failed_rows,
             "checked_rows": total - blank,
             "by_column": sorted(by_column.values(), key=lambda e: (-e["rows"], e["column"])),
+            "extra_cells": (
+                {
+                    "rows": len(source.extra_cell_rows),
+                    "examples": source.extra_cell_rows[:WARNING_EXAMPLES],
+                }
+                if source.extra_cell_rows
+                else None
+            ),
+            "id_check": id_check.report() if id_check is not None else None,
         }
     return sample, total, blank, validation
 

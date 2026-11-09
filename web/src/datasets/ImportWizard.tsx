@@ -29,6 +29,10 @@ import { formatJson, parseJsonText, summarizeJson } from './json'
 
 const ACCEPTED = '.csv,.xlsx,.json,.jsonl,.ndjson,.yaml,.yml'
 
+function plural(count: number, word: string): string {
+  return `${count} ${word}${count === 1 ? '' : 's'}`
+}
+
 // Sample values are strings for CSV/XLSX and typed for JSON/YAML.
 function showValue(value: unknown): string {
   if (value === null || value === undefined) return ''
@@ -636,6 +640,30 @@ export function ImportWizard({
                       Import the valid rows anyway
                     </label>
                   </div>
+                )}
+                {!committed && report && (report.extra_cells || report.id_check) && (
+                  <ul className="notice warning-list">
+                    {report.extra_cells && (
+                      <li>
+                        {plural(report.extra_cells.rows, 'row')} {report.extra_cells.rows === 1 ? 'has' : 'have'} more
+                        cells than the header (row {report.extra_cells.examples.join(', ')}
+                        {report.extra_cells.rows > report.extra_cells.examples.length && ', …'}). The extra cells won't
+                        be imported.
+                      </li>
+                    )}
+                    {report.id_check && (
+                      <li>
+                        This dataset has no key column, so rows are imported even when the file's{' '}
+                        <code>{report.id_check.column}</code> repeats or is empty:
+                        {report.id_check.repeated_rows > 0 &&
+                          ` ${plural(report.id_check.repeated_rows, 'row')} repeat${report.id_check.repeated_rows === 1 ? 's' : ''} an earlier value (${report.id_check.repeated.join(', ')})`}
+                        {report.id_check.repeated_rows > 0 && report.id_check.missing_rows > 0 && ';'}
+                        {report.id_check.missing_rows > 0 &&
+                          ` ${plural(report.id_check.missing_rows, 'row')} ${report.id_check.missing_rows === 1 ? 'has' : 'have'} none`}
+                        .
+                      </li>
+                    )}
+                  </ul>
                 )}
                 {!committed && report && report.by_column.length > 0 && (
                   <ul className="import-by-column">

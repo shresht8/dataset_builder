@@ -200,6 +200,11 @@ export interface ImportValidationReport {
   failed_rows: number
   checked_rows: number // total rows minus blank lines
   by_column: ImportColumnProblem[]
+  // Warnings only (GL-146): the import still goes ahead.
+  // CSV/XLSX rows with cells past the header; those cells aren't imported.
+  extra_cells: { rows: number; examples: number[] } | null
+  // No key column, and the mapped source `id` repeats or is empty.
+  id_check: { column: string; repeated: string[]; repeated_rows: number; missing_rows: number } | null
 }
 
 export interface ImportCompatibility {
