@@ -29,7 +29,7 @@ read the file for details such as exact props, flags, view lists and keys.
 | `shell/AppShell.tsx` | Page frame. |
 | `datasets/DatasetListPage.tsx` | Route `/`: collections, then unfiled datasets; new collection, new unfiled dataset, import collection. |
 | `collections/CollectionPage.tsx` | Route `/collections/:collectionId`: folder tree, content pane, Store tab, export. Dialogs for folders, move and delete in `collections/dialogs.tsx`. |
-| `collections/NewDatasetWizard.tsx` | Multi-file queue: details → infer or pick a store entry → create → the import wizard on the same file. Cancelling offers to delete the empty dataset. |
+| `collections/NewDatasetWizard.tsx` | Multi-file queue: details → infer or pick a store entry → create → the import wizard on the same file. A store pick that the import would refuse blocks Create unless confirmed. Until rows are imported, "Back to schema" deletes the empty dataset (and the store entry it added) and returns to the schema step; cancelling offers to delete it. |
 | `collections/StorePanel.tsx`, `BundleDialogs.tsx`, `DatasetBreadcrumb.tsx` | Store list and editing; export/import collection dialogs; the path breadcrumb on a dataset page. |
 | `schema/SchemaEditor.tsx` | The one column editor, used for store entries and unfiled datasets. |
 | `datasets/SchemaPanel.tsx` | Dataset schema: direct edit when unfiled; change / duplicate & edit the store entry when in a collection. |

@@ -31,6 +31,9 @@ plus the edge you touched) and run build and lint.
 - Grid keyboard handling lives in `handleTableKeyDown` in
   `src/datasets/DatasetPage.tsx`. Change keys there and check `boolean`,
   `long_text`, `json` and `multi_select` cells.
+- A cell edit saves on Enter, Tab, or focus leaving the cell
+  (`handleEditorBlur`); only Escape cancels. Never end an edit without going
+  through `commitEdit` or `cancelEdit`, or the draft is silently lost.
 - Match the existing style: CSS classes in `index.css`, no new UI or state
   library for a single use.
 
