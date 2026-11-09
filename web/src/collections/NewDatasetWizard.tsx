@@ -237,9 +237,12 @@ export function NewDatasetWizard({ collection, initialFolderId = null, onClose, 
             columns={importColumns}
             initialFile={item.file}
             initialRecordsKey={recordsKey}
-            onImported={() => {
+            onImported={(count, notImported) => {
               setImported(true)
-              patchItem({ status: 'imported' })
+              patchItem({
+                status: 'imported',
+                note: notImported > 0 ? `${count} imported, ${notImported} not imported` : undefined,
+              })
               onChanged()
             }}
             onClose={() => {

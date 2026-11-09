@@ -82,7 +82,9 @@ interface ImportWizardProps {
   datasetId: string
   columns: Column[]
   onClose: () => void
-  onImported: () => void
+  // After every round that created rows, even if other rows still have errors:
+  // the rows imported so far, and the rows of this file still not imported.
+  onImported: (imported: number, notImported: number) => void
   // Phase 4 (GL-121): start from a file the user already uploaded (the
   // new-dataset wizard), skipping the upload step.
   initialFile?: File
@@ -363,9 +365,9 @@ export function ImportWizard({
         imported: prev.imported + result.imported,
         skipped: prev.skipped + result.skipped,
       }))
-      if (result.errors.length === 0) {
-        setDone(true)
-        onImported()
+      if (result.errors.length === 0) setDone(true)
+      if (result.imported > 0 || totals.imported > 0) {
+        onImported(totals.imported + result.imported, remainingRows.size)
       }
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Import failed')
