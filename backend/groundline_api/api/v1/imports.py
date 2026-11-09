@@ -22,6 +22,9 @@ are refused with 413.
 `records_key` picks the list of records in a JSON/YAML object when it can't be
 found automatically; the 422 that asks for it carries `records_key_candidates`.
 
+`delimiter` (both routes, CSV only): one of `,` `;` tab `|`. Without it the
+delimiter is detected (GL-141); preview returns the one used.
+
 Row index convention: 1-based, counting only rows of data (the header row is
 not numbered; for JSON/JSONL/YAML it's the record's position).
 
@@ -129,7 +132,10 @@ def _parse_json_form(raw: str | None, field: str) -> Any:
 
 
 async def read_upload(
-    file: UploadFile, columns: list[DatasetColumn], records_key: str | None
+    file: UploadFile,
+    columns: list[DatasetColumn],
+    records_key: str | None,
+    delimiter: str | None = None,
 ) -> importer.ParsedSource:
     limit = settings.import_max_bytes
     content = await file.read(limit + 1)
@@ -139,7 +145,7 @@ async def read_upload(
             detail=f"file is larger than the import limit of {limit // (1024 * 1024)} MB",
         )
     try:
-        return importer.parse_upload(file.filename or "", content, columns, records_key)
+        return importer.parse_upload(file.filename or "", content, columns, records_key, delimiter)
     except importer.ImportRequestError as exc:
         raise ImportProblem(str(exc), exc.candidates) from exc
 
@@ -152,11 +158,12 @@ async def preview_import(
     file: Annotated[UploadFile, File()],
     mapping: Annotated[str | None, Form()] = None,
     records_key: Annotated[str | None, Form()] = None,
+    delimiter: Annotated[str | None, Form()] = None,
 ) -> ImportPreviewResponse | JSONResponse:
     _get_dataset_or_404(db, dataset_id)
     columns = _columns_of(db, dataset_id)
     try:
-        source = await read_upload(file, columns, records_key)
+        source = await read_upload(file, columns, records_key, delimiter)
     except ImportProblem as exc:
         return problem_response(exc)
 
@@ -185,6 +192,7 @@ async def preview_import(
         validation=validation,
         records_key=source.records_key,
         ignored_keys=source.ignored_keys,
+        delimiter=source.delimiter,
     )
 
 
@@ -198,11 +206,12 @@ async def commit_import(
     skip: Annotated[str | None, Form()] = None,
     fixes: Annotated[str | None, Form()] = None,
     records_key: Annotated[str | None, Form()] = None,
+    delimiter: Annotated[str | None, Form()] = None,
 ) -> ImportCommitResponse | JSONResponse:
     _get_dataset_or_404(db, dataset_id)
     columns = _columns_of(db, dataset_id)
     try:
-        source = await read_upload(file, columns, records_key)
+        source = await read_upload(file, columns, records_key, delimiter)
     except ImportProblem as exc:
         return problem_response(exc)
 

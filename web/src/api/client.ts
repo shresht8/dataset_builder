@@ -313,17 +313,20 @@ export function cutVersion(datasetId: string, payload: VersionCutPayload): Promi
 // Without `mapping`, returns detected columns + a suggested auto-mapping and
 // a sample. With `mapping`, additionally returns the full validation report.
 // `recordsKey` picks the list of records in a JSON/YAML file (GL-3.5-5); when
-// one is needed, the 422's body carries `records_key_candidates`.
+// one is needed, the 422's body carries `records_key_candidates`. `delimiter`
+// (CSV only) overrides the detected one (GL-141).
 export function previewImport(
   datasetId: string,
   file: File,
   mapping?: Record<string, string>,
   recordsKey?: string,
+  delimiter?: string,
 ): Promise<ImportPreviewResponse> {
   const form = new FormData()
   form.append('file', file)
   if (mapping) form.append('mapping', JSON.stringify(mapping))
   if (recordsKey) form.append('records_key', recordsKey)
+  if (delimiter) form.append('delimiter', delimiter)
   return apiFetchForm<ImportPreviewResponse>(`/datasets/${datasetId}/import/preview`, form)
 }
 
@@ -336,6 +339,7 @@ export function commitImport(
   skip: number[],
   fixes: Record<number, Record<string, unknown>>,
   recordsKey?: string,
+  delimiter?: string,
 ): Promise<ImportCommitResponse> {
   const form = new FormData()
   form.append('file', file)
@@ -343,15 +347,17 @@ export function commitImport(
   if (skip.length > 0) form.append('skip', JSON.stringify(skip))
   if (Object.keys(fixes).length > 0) form.append('fixes', JSON.stringify(fixes))
   if (recordsKey) form.append('records_key', recordsKey)
+  if (delimiter) form.append('delimiter', delimiter)
   return apiFetchForm<ImportCommitResponse>(`/datasets/${datasetId}/import`, form)
 }
 
 // Schema inference (GL-117): drafts columns from a data file; creates nothing.
 // A 422 may carry `records_key_candidates`, as import preview does.
-export function inferSchema(file: File, recordsKey?: string): Promise<InferResponse> {
+export function inferSchema(file: File, recordsKey?: string, delimiter?: string): Promise<InferResponse> {
   const form = new FormData()
   form.append('file', file)
   if (recordsKey) form.append('records_key', recordsKey)
+  if (delimiter) form.append('delimiter', delimiter)
   return apiFetchForm<InferResponse>('/schema/infer', form)
 }
 

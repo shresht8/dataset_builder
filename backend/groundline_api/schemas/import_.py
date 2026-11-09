@@ -63,6 +63,8 @@ class ImportPreviewResponse(BaseModel):
     # top-level keys that were ignored.
     records_key: str | None = None
     ignored_keys: list[str] = []
+    # CSV only: the delimiter used (detected, unless one was given).
+    delimiter: str | None = None
 
 
 class ImportCommitResponse(BaseModel):

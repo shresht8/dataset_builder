@@ -23,7 +23,7 @@ import {
 import type { Column, CollectionTree, Dataset, StoreEntry } from '../api/types'
 import { ConfirmDialog } from '../datasets/ConfirmDialog'
 import { fileCompat, labelList } from '../datasets/compat'
-import { ImportWizard, RECORDS_LIST_QUESTION } from '../datasets/ImportWizard'
+import { DelimiterPicker, ImportWizard, RECORDS_LIST_QUESTION } from '../datasets/ImportWizard'
 import { SchemaEditor, columnProblems, toEditable, toInput, type EditableColumn } from '../schema/SchemaEditor'
 import { Dialog, errorMessage, folderOptions } from './dialogs'
 
@@ -94,6 +94,8 @@ export function NewDatasetWizard({ collection, initialFolderId = null, onClose, 
   const [folderId, setFolderId] = useState<string>(initialFolderId ?? '')
   const [recordsKey, setRecordsKey] = useState<string | undefined>(undefined)
   const [keyChoices, setKeyChoices] = useState<string[] | null>(null)
+  // CSV only: the delimiter infer used; the import step reuses it (GL-141).
+  const [delimiter, setDelimiter] = useState<string | undefined>(undefined)
   const [tab, setTab] = useState<'infer' | 'store'>('infer')
   const [columns, setColumns] = useState<EditableColumn[]>([])
   const [warnings, setWarnings] = useState<string[]>([])
@@ -122,6 +124,7 @@ export function NewDatasetWizard({ collection, initialFolderId = null, onClose, 
     setFolderId(initialFolderId ?? '')
     setRecordsKey(undefined)
     setKeyChoices(null)
+    setDelimiter(undefined)
     setTab('infer')
     setColumns([])
     setWarnings([])
@@ -143,12 +146,13 @@ export function NewDatasetWizard({ collection, initialFolderId = null, onClose, 
     else beginItem(nextIndex)
   }
 
-  async function runInfer(key?: string) {
+  async function runInfer(key?: string, delim?: string) {
     if (!item) return
     setBusy(true)
     setError(null)
     try {
-      const result = await inferSchema(item.file, key)
+      const result = await inferSchema(item.file, key, delim)
+      setDelimiter(result.delimiter ?? undefined)
       setColumns(toEditable(result.columns))
       setWarnings(result.warnings)
       setFileColumns(result.columns.map((c) => c.key))
@@ -237,6 +241,7 @@ export function NewDatasetWizard({ collection, initialFolderId = null, onClose, 
             columns={importColumns}
             initialFile={item.file}
             initialRecordsKey={recordsKey}
+            initialDelimiter={delimiter}
             onImported={(count, notImported) => {
               setImported(true)
               patchItem({
@@ -401,6 +406,10 @@ export function NewDatasetWizard({ collection, initialFolderId = null, onClose, 
                 ))}
               </select>
             </label>
+          )}
+
+          {delimiter !== undefined && (
+            <DelimiterPicker value={delimiter} disabled={busy} onChange={(next) => void runInfer(recordsKey, next)} />
           )}
 
           {tab === 'infer' && (

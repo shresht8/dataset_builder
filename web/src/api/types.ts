@@ -133,6 +133,7 @@ export interface InferResponse {
   columns: ColumnInput[]
   warnings: string[]
   record_count: number
+  delimiter: string | null // CSV only: the one used
 }
 
 // Row status flow (§4): draft -> needs_review -> approved.
@@ -220,6 +221,8 @@ export interface ImportPreviewResponse {
   // top-level keys that were ignored.
   records_key: string | null
   ignored_keys: string[]
+  // CSV only: the delimiter used (detected unless one was given, GL-141).
+  delimiter: string | null
 }
 
 export interface ImportCommitResponse {

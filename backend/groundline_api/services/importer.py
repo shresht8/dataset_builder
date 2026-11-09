@@ -55,6 +55,7 @@ from __future__ import annotations
 import csv
 import datetime as dt
 import io
+import itertools
 import re
 import zipfile
 from collections.abc import Iterator
@@ -81,6 +82,9 @@ from groundline_api.models.dataset import DatasetColumn
 from groundline_api.services.validation import key_column, row_errors
 
 SAMPLE_SIZE = 20
+# CSV delimiters tried by `detect_delimiter`, in order of preference on a tie.
+CSV_DELIMITERS = (",", ";", "\t", "|")
+_DELIMITER_SAMPLE_RECORDS = 50
 # The preview lists at most this many rows with errors; the totals are exact.
 ERROR_ROWS_SHOWN = 200
 NO_MAPPED_VALUES = "no values in the mapped columns"
@@ -107,6 +111,7 @@ class ParsedSource:
     structured: bool = False
     records_key: str | None = None
     ignored_keys: list[str] = field(default_factory=list)
+    delimiter: str | None = None  # CSV only: the one used
 
 
 def parse_upload(
@@ -114,11 +119,15 @@ def parse_upload(
     content: bytes,
     columns: list[DatasetColumn] | None = None,
     records_key: str | None = None,
+    delimiter: str | None = None,
 ) -> ParsedSource:
-    """Parse an upload into source columns and a row iterator."""
+    """Parse an upload into source columns and a row iterator.
+
+    A CSV uses `delimiter` when given (one of CSV_DELIMITERS), else the detected one.
+    """
     lower = filename.lower()
     if lower.endswith(".csv"):
-        return _parse_csv(content)
+        return _parse_csv(content, delimiter)
     if lower.endswith(".xlsx"):
         return _parse_xlsx(content)
     if lower.endswith(STRUCTURED_SUFFIXES):
@@ -129,12 +138,42 @@ def parse_upload(
     )
 
 
-def _parse_csv(content: bytes) -> ParsedSource:
+def detect_delimiter(text: str) -> str:
+    """The CSV_DELIMITERS entry that splits the first records most consistently.
+
+    A candidate must split the header into at least two columns. Among those, the
+    one with the most non-blank records as wide as the header wins, then the
+    widest header, then the earlier entry. With no candidate, a comma.
+    """
+    best, best_score = ",", (0, 0)
+    for delimiter in CSV_DELIMITERS:
+        try:
+            records = list(
+                itertools.islice(
+                    csv.reader(io.StringIO(text), delimiter=delimiter), _DELIMITER_SAMPLE_RECORDS
+                )
+            )
+        except csv.Error:
+            continue  # e.g. one huge field: this isn't the delimiter
+        widths = [len(r) for r in records if any(cell.strip() for cell in r)]
+        if not widths or widths[0] < 2:
+            continue
+        score = (sum(1 for w in widths if w == widths[0]), widths[0])
+        if score > best_score:
+            best, best_score = delimiter, score
+    return best
+
+
+def _parse_csv(content: bytes, delimiter: str | None = None) -> ParsedSource:
     try:
         text = decode_text(content, csv=True)
     except RecordsError as exc:
         raise ImportRequestError(str(exc)) from None
-    reader = csv.reader(io.StringIO(text))
+    if delimiter is None:
+        delimiter = detect_delimiter(text)
+    elif delimiter not in CSV_DELIMITERS:
+        raise ImportRequestError("delimiter: expected a comma, semicolon, tab or |")
+    reader = csv.reader(io.StringIO(text), delimiter=delimiter)
     try:
         header = next(reader)
     except StopIteration:
@@ -144,7 +183,7 @@ def _parse_csv(content: bytes) -> ParsedSource:
         for raw_row in reader:
             yield _cells(header, raw_row)
 
-    return ParsedSource(header=header, rows=rows())
+    return ParsedSource(header=header, rows=rows(), delimiter=delimiter)
 
 
 def _parse_xlsx(content: bytes) -> ParsedSource:

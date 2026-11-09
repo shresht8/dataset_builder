@@ -39,6 +39,38 @@ function showValue(value: unknown): string {
 // Shown instead of the API's "choose a records_key" message (GL-132).
 export const RECORDS_LIST_QUESTION = 'This file has more than one list. Which one holds your data?'
 
+// CSV delimiters the API accepts (GL-141); it detects one when none is given.
+const DELIMITERS: [string, string][] = [
+  [',', 'Comma (,)'],
+  [';', 'Semicolon (;)'],
+  ['\t', 'Tab'],
+  ['|', 'Pipe (|)'],
+]
+
+/** The CSV delimiter in use; changing it re-reads the file. */
+export function DelimiterPicker({
+  value,
+  disabled,
+  onChange,
+}: {
+  value: string
+  disabled?: boolean
+  onChange: (delimiter: string) => void
+}) {
+  return (
+    <label className="records-key-choice">
+      Columns separated by{' '}
+      <select value={value} disabled={disabled} onChange={(event) => onChange(event.target.value)}>
+        {DELIMITERS.map(([d, label]) => (
+          <option key={label} value={d}>
+            {label}
+          </option>
+        ))}
+      </select>
+    </label>
+  )
+}
+
 function candidatesOf(err: unknown): string[] | null {
   if (!(err instanceof ApiError) || err.status !== 422) return null
   const body = err.body as { records_key_candidates?: unknown } | null
@@ -89,6 +121,7 @@ interface ImportWizardProps {
   // new-dataset wizard), skipping the upload step.
   initialFile?: File
   initialRecordsKey?: string
+  initialDelimiter?: string
 }
 
 type Step = 'upload' | 'mapping' | 'review'
@@ -181,6 +214,7 @@ export function ImportWizard({
   onImported,
   initialFile,
   initialRecordsKey,
+  initialDelimiter,
 }: ImportWizardProps) {
   const activeColumns = columns.filter((c) => !c.archived)
   const columnsByKey = new Map(activeColumns.map((c) => [c.key, c]))
@@ -194,6 +228,8 @@ export function ImportWizard({
   const [recordsKey, setRecordsKey] = useState<string | undefined>(undefined)
   const [ignoredKeys, setIgnoredKeys] = useState<string[]>([])
   const [recordsKeyChoices, setRecordsKeyChoices] = useState<string[] | null>(null)
+  // CSV only: the delimiter the preview used (detected or chosen).
+  const [delimiter, setDelimiter] = useState<string | undefined>(undefined)
   const [totalRows, setTotalRows] = useState(0)
   const [blankSkipped, setBlankSkipped] = useState(0)
   const [report, setReport] = useState<ImportValidationReport | null>(null)
@@ -246,15 +282,16 @@ export function ImportWizard({
     setRecordsKey(preview.records_key ?? undefined)
     setIgnoredKeys(preview.ignored_keys ?? [])
     setRecordsKeyChoices(null)
+    setDelimiter(preview.delimiter ?? undefined)
     setStep('mapping')
   }
 
-  async function loadPreview(chosen: File, key?: string) {
+  async function loadPreview(chosen: File, key?: string, delim?: string) {
     setFile(chosen)
     setBusy(true)
     setError(null)
     try {
-      showPreview(await previewImport(datasetId, chosen, undefined, key))
+      showPreview(await previewImport(datasetId, chosen, undefined, key, delim))
     } catch (err) {
       const candidates = candidatesOf(err)
       if (candidates && candidates.length > 0) {
@@ -273,7 +310,7 @@ export function ImportWizard({
     if (!initialFile || started.current) return
     started.current = true
     setRecordsKey(initialRecordsKey)
-    void loadPreview(initialFile, initialRecordsKey)
+    void loadPreview(initialFile, initialRecordsKey, initialDelimiter)
     // Run once, for the file passed in.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -298,7 +335,7 @@ export function ImportWizard({
     setBusy(true)
     setError(null)
     try {
-      const preview = await previewImport(datasetId, file, mapping, recordsKey)
+      const preview = await previewImport(datasetId, file, mapping, recordsKey, delimiter)
       setValidCount(preview.validation?.valid ?? 0)
       setErrors(preview.validation?.errors ?? [])
       setReport(preview.validation)
@@ -329,6 +366,7 @@ export function ImportWizard({
     setMapping({})
     setRecordsKey(undefined)
     setRecordsKeyChoices(null)
+    setDelimiter(undefined)
     setIgnoredKeys([])
     setSourceColumns([])
     setSampleRows([])
@@ -359,7 +397,7 @@ export function ImportWizard({
     setError(null)
     const effectiveSkip = new Set([...handledRows, ...activeSkip])
     try {
-      const result = await commitImport(datasetId, file, mapping, [...effectiveSkip], fixes, recordsKey)
+      const result = await commitImport(datasetId, file, mapping, [...effectiveSkip], fixes, recordsKey, delimiter)
       const remainingRows = new Set(result.errors.map((e) => e.row))
       const importedThisRound = new Set<number>()
       for (let row = 1; row <= totalRows; row += 1) {
@@ -452,6 +490,13 @@ export function ImportWizard({
                 Rows from <code>{recordsKey}</code>
                 {ignoredKeys.length > 0 && <>; ignored: {ignoredKeys.join(', ')}</>}
               </p>
+            )}
+            {delimiter !== undefined && file && (
+              <DelimiterPicker
+                value={delimiter}
+                disabled={busy}
+                onChange={(next) => void loadPreview(file, recordsKey, next)}
+              />
             )}
             <table className="import-table">
               <thead>

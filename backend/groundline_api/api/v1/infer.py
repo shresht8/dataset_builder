@@ -1,7 +1,9 @@
 """Schema inference (Phase 4, GL-117).
 
-    POST /schema/infer   multipart file [+ records_key] [+ key]   editor+
-        -> {columns, warnings, record_count}
+    POST /schema/infer   multipart file [+ records_key] [+ key] [+ delimiter]   editor+
+        -> {columns, warnings, record_count, delimiter}
+
+`delimiter` is CSV only, as on import: given, or detected and returned.
 
 Drafts a column schema from a data file with the same rules as
 `groundline schema infer` (`groundline_schema.infer`). Creates nothing.
@@ -51,22 +53,26 @@ def _cell(value: Any) -> Any:
     return value
 
 
-def _records(filename: str, content: bytes, records_key: str | None) -> list[dict]:
+def _records(
+    filename: str, content: bytes, records_key: str | None, delimiter: str | None
+) -> tuple[list[dict], str | None]:
+    """The file's records, and the CSV delimiter used (None for other formats)."""
     if filename.lower().endswith(STRUCTURED_SUFFIXES):
         try:
             parsed = parse_records(filename, content, records_key, settings.import_max_nodes)
         except RecordsError as exc:
             raise ImportProblem(str(exc), exc.candidates) from None
-        return [r for r in parsed.records if not isinstance(r, RecordProblem)]
+        return [r for r in parsed.records if not isinstance(r, RecordProblem)], None
     try:
-        source = importer.parse_upload(filename, content, None, records_key)
+        source = importer.parse_upload(filename, content, None, records_key, delimiter)
     except importer.ImportRequestError as exc:
         raise ImportProblem(str(exc), exc.candidates) from None
-    return [
+    records = [
         {k: _cell(v) for k, v in row.items()}
         for row in source.rows
         if not isinstance(row, RecordProblem)
     ]
+    return records, source.delimiter
 
 
 @router.post("/infer", response_model=None)
@@ -75,6 +81,7 @@ async def infer_schema(
     file: Annotated[UploadFile, File()],
     records_key: Annotated[str | None, Form()] = None,
     key: Annotated[str | None, Form()] = None,
+    delimiter: Annotated[str | None, Form()] = None,
 ) -> dict[str, Any] | JSONResponse:
     limit = settings.import_max_bytes
     content = await file.read(limit + 1)
@@ -84,7 +91,7 @@ async def infer_schema(
             detail=f"file is larger than the import limit of {limit // (1024 * 1024)} MB",
         )
     try:
-        records = _records(file.filename or "", content, records_key)
+        records, used_delimiter = _records(file.filename or "", content, records_key, delimiter)
     except ImportProblem as exc:
         return problem_response(exc)
     try:
@@ -98,4 +105,9 @@ async def infer_schema(
         if comment:
             warnings.append(f"column '{column['key']}': {comment}")
         columns.append(column)
-    return {"columns": columns, "warnings": warnings, "record_count": len(records)}
+    return {
+        "columns": columns,
+        "warnings": warnings,
+        "record_count": len(records),
+        "delimiter": used_delimiter,
+    }
