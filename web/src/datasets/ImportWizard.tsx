@@ -261,7 +261,12 @@ export function ImportWizard({
         ? `No column of the file is mapped to ${labelList(compat.requiredMissing)} (required). Map one, or change the schema first.`
         : null
   // Half or more of the checked rows fail: probably the wrong schema (GL-133).
-  const wrongSchema = !committed && report !== null && report.checked_rows > 0 && report.failed_rows * 2 >= report.checked_rows
+  // Rows failing only on their key say nothing about the schema, so they are
+  // left out of both counts (GL-142).
+  const keyOnlyRows = report ? report.existing_key_rows + report.repeated_key_rows : 0
+  const schemaFailed = report ? report.failed_rows - keyOnlyRows : 0
+  const schemaChecked = report ? report.checked_rows - keyOnlyRows : 0
+  const wrongSchema = !committed && report !== null && schemaFailed > 0 && schemaFailed * 2 >= schemaChecked
   const shownRows = new Set(errors.map((e) => e.row)).size
   const nothingToApply = committed && Object.keys(fixes).length === 0 && activeSkip.size === 0
 
@@ -627,10 +632,11 @@ export function ImportWizard({
                 {wrongSchema && report && (
                   <div className="notice warning-list" role="alert">
                     <p>
-                      This looks like the wrong schema: {report.failed_rows} of {report.checked_rows} rows fail
-                      validation. Go back to change the mapping, choose another file, or close this window. The schema
-                      of an empty dataset can be changed from its Schema tab.
+                      This looks like the wrong schema: {schemaFailed} of {schemaChecked} rows fail validation. Go
+                      back to change the mapping, choose another file, or close this window. The schema of an empty
+                      dataset can be changed from its Schema tab.
                     </p>
+                    <p>To import the valid rows anyway, tick the box below.</p>
                     <label>
                       <input
                         type="checkbox"
@@ -639,6 +645,31 @@ export function ImportWizard({
                       />{' '}
                       Import the valid rows anyway
                     </label>
+                  </div>
+                )}
+                {!committed && report && keyOnlyRows > 0 && (
+                  <div className="notice" role="status">
+                    {report.existing_key_rows === report.checked_rows ? (
+                      <p>
+                        Every row of this file is already in the dataset (same key), so there is nothing new to import.
+                        Import only adds new rows.
+                      </p>
+                    ) : (
+                      <>
+                        {report.existing_key_rows > 0 && (
+                          <p>
+                            {plural(report.existing_key_rows, 'row')} {report.existing_key_rows === 1 ? 'is' : 'are'}{' '}
+                            already in the dataset (same key) and won't be imported: import only adds new rows.
+                          </p>
+                        )}
+                        {report.repeated_key_rows > 0 && (
+                          <p>
+                            {plural(report.repeated_key_rows, 'row')} {report.repeated_key_rows === 1 ? 'repeats' : 'repeat'}{' '}
+                            the key of an earlier row in this file.
+                          </p>
+                        )}
+                      </>
+                    )}
                   </div>
                 )}
                 {!committed && report && (report.extra_cells || report.id_check) && (

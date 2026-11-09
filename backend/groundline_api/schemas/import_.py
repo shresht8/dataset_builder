@@ -55,6 +55,10 @@ class ImportValidationReport(BaseModel):
     failed_rows: int
     checked_rows: int  # total rows minus blank lines
     by_column: list[ImportColumnProblem]
+    # Failed rows whose only problem is the key (GL-142): it is already in the
+    # dataset, or it repeats a key from an earlier row of the file.
+    existing_key_rows: int = 0
+    repeated_key_rows: int = 0
     # Warnings only: the import still goes ahead.
     extra_cells: ImportExtraCells | None = None
     id_check: ImportIdCheck | None = None

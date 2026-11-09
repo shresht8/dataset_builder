@@ -200,6 +200,10 @@ export interface ImportValidationReport {
   failed_rows: number
   checked_rows: number // total rows minus blank lines
   by_column: ImportColumnProblem[]
+  // Failed rows whose only problem is the key (GL-142): already in the dataset,
+  // or repeating a key from an earlier row of the file.
+  existing_key_rows: number
+  repeated_key_rows: number
   // Warnings only (GL-146): the import still goes ahead.
   // CSV/XLSX rows with cells past the header; those cells aren't imported.
   extra_cells: { rows: number; examples: number[] } | null

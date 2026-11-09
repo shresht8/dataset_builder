@@ -463,8 +463,11 @@ class _KeyCheck:
     column: DatasetColumn | None
     existing: set[str]
     first_row: dict[str, int] = field(default_factory=dict)
+    # What the last `failures` call found: None, "repeated" or "existing" (GL-142).
+    last: str | None = None
 
     def failures(self, index: int, data: dict[str, Any]) -> list[tuple[str, str]]:
+        self.last = None
         if self.column is None:
             return []
         value = data.get(self.column.key)
@@ -472,9 +475,11 @@ class _KeyCheck:
             return []  # row_errors already reports a missing/invalid key
         key = self.column.key
         if value in self.first_row:
+            self.last = "repeated"
             return [(key, f"duplicate key '{value}' in file (also row {self.first_row[value]})")]
         self.first_row[value] = index
         if value in self.existing:
+            self.last = "existing"
             return [(key, f"key '{value}' already exists — use rows push to update")]
         return []
 
@@ -562,7 +567,8 @@ def preview(
     out). total_rows counts blank CSV/XLSX lines too, so indices stay positions in
     the file. validation is `None` if no mapping was supplied, else the report:
     `valid`, at most ERROR_ROWS_SHOWN rows' worth of `errors`, and exact totals
-    (`error_total`, `failed_rows`, `checked_rows`, `by_column`), plus the warnings
+    (`error_total`, `failed_rows`, `checked_rows`, `by_column`, and the failed rows
+    whose only problem is the key: `existing_key_rows`, `repeated_key_rows`), plus the warnings
     `extra_cells` and `id_check` (None when there is nothing to warn about).
     """
     columns_by_key = {col.key: col for col in columns}
@@ -581,6 +587,8 @@ def preview(
     shown_rows = 0
     errors: list[dict[str, Any]] = []
     by_column: dict[str, dict[str, Any]] = {}
+    # Rows whose only failure is the key: already in the dataset, or repeated in the file.
+    key_only = {"existing": 0, "repeated": 0}
 
     for index, values in _iterate_rows(source):
         total += 1
@@ -593,6 +601,7 @@ def preview(
             continue
         if id_check is not None and not isinstance(values, RecordProblem):
             id_check.add(values)
+        keys.last = None  # _validate_row may return before checking the key
         _, failures = _validate_row(
             index, values, mapping, columns, columns_by_key, source.structured, {}, keys
         )
@@ -600,6 +609,8 @@ def preview(
             valid += 1
             continue
         failed_rows += 1
+        if keys.last is not None and len(failures) == 1:
+            key_only[keys.last] += 1
         error_total += len(failures)
         for key, reason in failures:
             entry = by_column.setdefault(key, {"column": key, "rows": 0, "reason": reason})
@@ -619,6 +630,8 @@ def preview(
             "failed_rows": failed_rows,
             "checked_rows": total - blank,
             "by_column": sorted(by_column.values(), key=lambda e: (-e["rows"], e["column"])),
+            "existing_key_rows": key_only["existing"],
+            "repeated_key_rows": key_only["repeated"],
             "extra_cells": (
                 {
                     "rows": len(source.extra_cell_rows),
