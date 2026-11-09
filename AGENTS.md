@@ -150,7 +150,8 @@ Boris Cherny (creator of Claude Code) keeps his team's file around 100 lines. Un
 
 Groundline: a tabular annotation tool that produces versioned evaluation
 datasets. Typed column schema → rows edited in a web grid or synced from files
-→ immutable, hash-verified versions pulled by `name@vN`.
+→ immutable, hash-verified versions pulled by path (`collection/…/name@vN`).
+Datasets can be grouped into collections with folders and a shared schema store.
 
 **Repo map (read the one for the layer you touch):**
 [docs/architecture.md](docs/architecture.md) (start here) ·
@@ -195,7 +196,7 @@ tests mock HTTP and need nothing. The web app has no unit tests; verify UI in a 
 - `shared/groundline_schema/`: column types, manifest, JSON Schema, path/record/render helpers used by both API and CLI.
 - `backend/groundline_api/`: `api/v1/` routes, `services/`, `models/`, `schemas/`, `auth/`; migrations in `backend/migrations/versions/`.
 - `cli/groundline_cli/`: `groundline` command.
-- `web/src/`: `api/` (client + types), `auth/`, `datasets/` (grid and panels), `tokens/`, `shell/`.
+- `web/src/`: `api/` (client + types), `auth/`, `datasets/` (grid and panels), `collections/` (collection page, store, wizard, bundles), `schema/` (schema editor), `tokens/`, `shell/`.
 - Tests: `backend/tests/` (also covers `shared/`), `cli/tests/`.
 
 ### Conventions specific to this repo

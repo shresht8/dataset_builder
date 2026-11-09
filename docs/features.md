@@ -13,7 +13,7 @@ Where each shipped feature lives. Paths are relative to the repo root;
 | User management (admin) + first-admin bootstrap | `users` | `api/users.py`, `bootstrap.py` | — | — | `test_users.py` |
 | Personal access tokens | `personal_access_tokens` | `api/auth.py` `/tokens`, `auth/tokens.py` | `tokens/TokensPage.tsx` | `config.py` | `test_pats.py` |
 | Datasets: list / create / delete (no versions) | `datasets` | `api/datasets.py` | `DatasetListPage.tsx`, `DeleteDatasetDialog.tsx` | `cmd/datasets.py` | `test_datasets_crud.py`, `test_delete.py` |
-| Column schema (8 types, archive, dotted keys) | `dataset_columns` | `api/schema.py` | read-only in grid | `cmd/schema.py`, `schemafile.py` | `test_schema.py` |
+| Column schema (8 types, archive, dotted keys) | `dataset_columns` | `api/schema.py`, `svc/columns.py` | `ds/SchemaPanel.tsx`, `schema/SchemaEditor.tsx` | `cmd/schema.py`, `schemafile.py` | `test_schema.py` |
 | `json` columns + JSON Schema + key column | `json_schema`, `is_key`, `row_key` | `api/schema.py`, `svc/validation.py`, `api/rows.py` | `DetailDrawer.tsx`, `json.ts` | `schema infer --key` | `test_schema_json_key.py`, `test_rows_json_key.py`, `test_json_key_model.py` |
 | `date` columns | `column_type` value | `svc/validation.py`, `groundline_schema/temporal.py`, `svc/importer.py` | `Cell.tsx` `DateInput`, `dates.ts` | `schemafile.py` inference | `test_date_values.py`, `test_import_dates.py`, `test_temporal.py` |
 | Row CRUD + typed validation | `dataset_rows` | `api/rows.py`, `svc/validation.py` | `DatasetPage.tsx`, `Cell.tsx` | — | `test_datasets_rows.py`, `test_rows_validation.py` |
@@ -30,6 +30,12 @@ Where each shipped feature lives. Paths are relative to the repo root;
 | Version diff | snapshots | `api/versions.py`, `svc/diff.py` | — | `datasets diff` | `test_diff.py` |
 | Pull + lock file (CI) | — | export endpoints | — | `main.py` `pull`, `pull.py`, `lock.py` | `cli/tests/test_pull*.py`, `test_lock.py` |
 | Health check | — | `api/health.py` | — | — | `test_health.py` |
+| Collections + folders, dataset paths, move | `collections`, `folders`, `datasets.collection_id/folder_id` | `api/collections.py`, `api/datasets.py` `resolve`/`move`, `svc/paths.py` | `DatasetListPage.tsx` (home), `collections/CollectionPage.tsx`, `collections/dialogs.tsx`, `collections/DatasetBreadcrumb.tsx` | `cmd/collections.py`, `cmd/folders.py`, `datasets list --collection`, `datasets move`, `paths.py` | `test_collections.py`, `cli/tests/test_collections_commands.py` |
+| Per-collection schema store (reuse by hash, freeze in use, apply, resolve on move) | `collection_schemas`, `datasets.store_schema_id` | `api/store.py`, `api/schema.py` `apply`, `svc/store.py`, `groundline_schema/schema_hash.py` | `collections/StorePanel.tsx`, `ds/SchemaPanel.tsx` | `cmd/store.py`, `schema apply`, `datasets create --from-store` | `test_store.py` |
+| Schema inference from a data file | — | `api/infer.py`, `groundline_schema/infer.py` | `collections/NewDatasetWizard.tsx` | `schema infer` | `test_infer.py` |
+| New-dataset wizard (multi-file: infer or store → create → import) | — | `POST /datasets`, `/schema/infer`, import endpoints | `collections/NewDatasetWizard.tsx`, `ImportWizard.tsx` (`initialFile`) | — | manual |
+| Collection bundles: zip export/import, directory pull/push | — | `api/bundles.py`, `svc/bundles.py`, `groundline_schema/bundle.py` | `collections/BundleDialogs.tsx` | `collections pull/push` | `test_bundles.py`, `cli/tests/test_collections_commands.py` |
+| Version storage keyed by dataset id | `snapshot_uri` | `svc/versioning.py`, `svc/storage.py` `get_snapshot_file` | — | — | `test_version_storage.py` |
 
 ## Not implemented yet
 
@@ -37,4 +43,9 @@ Where each shipped feature lives. Paths are relative to the repo root;
   `dataset_rows.source_trace_id` exists but nothing writes it.
 - PAT scopes: stored, not enforced.
 - `datetime` column type: only `date` exists.
-- Web UI for creating datasets and editing schemas (use the API or CLI).
+- Renaming a dataset: paths change only through moves and collection/folder renames.
+- A store shared across collections, collection-level versions, per-collection permissions.
+- Bundles carry rows only: imported rows start as `draft`, without assignees,
+  comments, edit history or versions. Bundle import validates rows strictly,
+  so a collection whose live rows break their own schema exports but won't
+  import until fixed.

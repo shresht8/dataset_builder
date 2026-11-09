@@ -12,16 +12,26 @@ are UUIDs generated server-side with `gen_random_uuid()`.
 |---|---|---|
 | `users` | `User` (`user.py`) | People. `email` unique, `role` (`user_role` enum), `entra_oid` (set on SSO JIT), `active` (inactive users can't authenticate). |
 | `personal_access_tokens` | `PersonalAccessToken` (`user.py`) | Machine tokens. Stores `token_hash` (sha256, unique) only, `expires_at`, `revoked_at`, `scopes` (JSONB, stored but not enforced). FK `user_id` → users, cascade. |
-| `datasets` | `Dataset` (`dataset.py`) | `name` unique (`uq_datasets_name`), `description`, `project_id` and `feature_id` (free strings, no FK), `created_by`. |
+| `collections` | `Collection` (`collection.py`) | Named group of datasets. `name` unique (`uq_collections_name`), `description`, `created_by`. |
+| `folders` | `Folder` (`collection.py`) | Folder tree inside one collection: `collection_id`, `parent_id` (NULL = collection root), `name`. |
+| `collection_schemas` | `CollectionSchema` (`collection.py`) | The collection's schema store. `name` unique per collection, `columns` (JSONB, wire columns), `content_hash` (canonical hash from `groundline_schema.schema_hash`, used to reuse an identical entry). |
+| `datasets` | `Dataset` (`dataset.py`) | `name` unique within its parent (see constraints), `description`, `project_id` and `feature_id` (free strings, no FK), `created_by`, `collection_id` (NULL = unfiled), `folder_id` (NULL = collection root), `store_schema_id` (the store entry a collection dataset uses). |
 | `dataset_columns` | `DatasetColumn` (`dataset.py`) | Schema. `key` (may be a dotted path), `label`, `type` (`column_type` enum), `options` (JSONB list for select types), `required`, `order`, `archived`, `json_schema` (JSONB, `json` columns only), `is_key`. |
 | `dataset_rows` | `DatasetRow` (`row.py`) | `data` (JSONB, flat, keyed by column key), `status` (`row_status` enum), `assignee`, `row_key`, `rev`, `source_trace_id`, `updated_by/at`, soft delete `deleted_at/by`. |
 | `row_edits` | `RowEdit` (`row.py`) | Append-only audit: `row_id`, `field`, `old_value`, `new_value` (JSONB), `user_id`, `at`. Written on every row PATCH that changes a field, status or assignee. Never updated or deleted by app code. |
 | `row_comments` | `RowComment` (`comment.py`) | Per-row thread: `row_id`, `user_id`, `body`, `created_at`. |
-| `dataset_versions` | `DatasetVersion` (`version.py`) | Immutable cuts: `version` (int, unique per dataset), `snapshot_uri` (`s3://bucket/datasets/{name}/v{n}/`), `content_hash` (sha256 hex; API shows `sha256:<hex>`), `schema_snapshot` (JSONB), `row_count`, `notes`, `created_by`. |
+| `dataset_versions` | `DatasetVersion` (`version.py`) | Immutable cuts: `version` (int, unique per dataset), `snapshot_uri` (`s3://bucket/datasets/{dataset_id}/v{n}/`; versions cut before collections use `{name}`, so always read through this column), `content_hash` (sha256 hex; API shows `sha256:<hex>`), `schema_snapshot` (JSONB), `row_count`, `notes`, `created_by`. |
 
 Foreign keys to `users` use `ON DELETE SET NULL`; child tables of a dataset or
 row use `ON DELETE CASCADE`, so deleting a dataset removes its columns, rows,
 edits and comments.
+
+Deleting a collection cascades to its folders and store entries.
+`datasets.collection_id`, `folder_id` and `store_schema_id` are `RESTRICT`, so
+a collection that holds datasets, a non-empty folder, or a store entry in use
+can't be deleted (the API checks first and returns 409). `folders.parent_id`
+is `NO ACTION`, not `RESTRICT`, so a collection's cascade can remove nested
+folders in one statement.
 
 ## Enums (native Postgres)
 
@@ -47,6 +57,17 @@ Adding an enum value needs a migration (`ALTER TYPE ... ADD VALUE`); see
 - `uq_dataset_versions_dataset_id_version`: one row per version number.
   Cutting also locks the dataset row, so two cuts can't race to the same
   number.
+
+- `uq_datasets_unfiled_name`: unique `name` where `collection_id IS NULL`.
+  `uq_datasets_collection_folder_name`: unique `(collection_id, folder_id,
+  name)` with `NULLS NOT DISTINCT`, so two datasets at a collection's root
+  also clash. Together they make a dataset path unique.
+- `uq_folders_collection_parent_name`: unique `(collection_id, parent_id,
+  name)`, `NULLS NOT DISTINCT` for root folders.
+- `ck_datasets_folder_needs_collection`: a folder implies a collection.
+  `ck_datasets_store_schema_iff_collection`: a dataset has a store entry
+  exactly when it is in a collection. That the folder and entry belong to the
+  dataset's own collection is checked by the API, not the DB.
 
 ## Value storage conventions
 
@@ -74,7 +95,10 @@ Adding an enum value needs a migration (`ALTER TYPE ... ADD VALUE`); see
 4. `37024be68b69` unique dataset name
 5. `42726e27aada` `json` column type, `json_schema`, `is_key`, `row_key`
 6. `05bf8a875f6f` `date` column type
-7. `724089577f90` soft-delete rows (head)
+7. `724089577f90` soft-delete rows
+8. `b4c1d2e3f405` collections, folders, schema store; dataset names unique
+   per parent instead of globally (head). Its downgrade refuses, rather than
+   renames, when two datasets share a name.
 
 Commands (run from repo root):
 

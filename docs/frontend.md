@@ -27,7 +27,12 @@ read the file for details such as exact props, flags, view lists and keys.
 | `api/types.ts` | Hand-written TS mirrors of the backend Pydantic schemas. |
 | `auth/` | `useAuth()` context, login form (dev login and/or SSO, chosen from `GET /auth/config`). |
 | `shell/AppShell.tsx` | Page frame. |
-| `datasets/DatasetListPage.tsx` | Route `/`. |
+| `datasets/DatasetListPage.tsx` | Route `/`: collections, then unfiled datasets; new collection, new unfiled dataset, import collection. |
+| `collections/CollectionPage.tsx` | Route `/collections/:collectionId`: folder tree, content pane, Store tab, export. Dialogs for folders, move and delete in `collections/dialogs.tsx`. |
+| `collections/NewDatasetWizard.tsx` | Multi-file queue: details → infer or pick a store entry → create → the import wizard on the same file. Cancelling offers to delete the empty dataset. |
+| `collections/StorePanel.tsx`, `BundleDialogs.tsx`, `DatasetBreadcrumb.tsx` | Store list and editing; export/import collection dialogs; the path breadcrumb on a dataset page. |
+| `schema/SchemaEditor.tsx` | The one column editor, used for store entries and unfiled datasets. |
+| `datasets/SchemaPanel.tsx` | Dataset schema: direct edit when unfiled; change / duplicate & edit the store entry when in a collection. |
 | `datasets/DatasetPage.tsx` | Route `/datasets/:datasetId`. The grid and everything around it: cell and keyboard state, filters, row add/delete, role gating. The largest file. |
 | `datasets/*.tsx` (other) | Panels and dialogs opened from `DatasetPage`: cell renderers/editors, detail drawer, status/assignee controls, filter bar, comments + history, conflict dialog, import wizard, versions panel, confirm dialogs. |
 | `datasets/views.ts` | Built-in and saved filter views. Saved views are in `localStorage`, per dataset. |
@@ -44,6 +49,5 @@ Rules and anti-patterns for this layer are in [`web/AGENTS.md`](../web/AGENTS.md
 
 ## Known gaps
 
-- No create-dataset screen and no schema editor; use the API or the CLI.
 - `GET /users` is admin-only, so non-admins cannot see assignee names and can
   only assign to themselves.
