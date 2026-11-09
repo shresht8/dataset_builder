@@ -223,6 +223,19 @@ export function ImportWizard({
   // Half or more of the checked rows fail: probably the wrong schema (GL-133).
   const wrongSchema = !committed && report !== null && report.checked_rows > 0 && report.failed_rows * 2 >= report.checked_rows
   const shownRows = new Set(errors.map((e) => e.row)).size
+  const nothingToApply = committed && Object.keys(fixes).length === 0 && activeSkip.size === 0
+
+  // A round's result is at the top; the button that ran it is below the error list.
+  const wizardRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (committed) wizardRef.current?.scrollTo({ top: 0 })
+  }, [committed, totals])
+
+  // Closing with rows still in error ends on the totals, not on a closed dialog.
+  function requestClose() {
+    if (committed && !done) setDone(true)
+    else onClose()
+  }
 
   function showPreview(preview: ImportPreviewResponse) {
     setSourceColumns(preview.columns)
@@ -363,7 +376,8 @@ export function ImportWizard({
       setErrors(result.errors)
       setTotals((prev) => ({
         imported: prev.imported + result.imported,
-        skipped: prev.skipped + result.skipped,
+        // Not result.skipped: that also counts rows imported in earlier rounds, sent in `skip`.
+        skipped: prev.skipped + activeSkip.size,
       }))
       if (result.errors.length === 0) setDone(true)
       if (result.imported > 0 || totals.imported > 0) {
@@ -379,16 +393,16 @@ export function ImportWizard({
   function handleKeyDown(event: KeyboardEvent<HTMLDivElement>) {
     if (event.key === 'Escape') {
       event.preventDefault()
-      onClose()
+      requestClose()
     }
   }
 
   return (
     <div className="drawer-backdrop" onKeyDown={handleKeyDown}>
-      <div className="import-wizard" role="dialog" aria-modal="true" aria-label="Import rows">
+      <div ref={wizardRef} className="import-wizard" role="dialog" aria-modal="true" aria-label="Import rows">
         <div className="drawer-header">
           <span>Import rows</span>
-          <button type="button" onClick={onClose}>
+          <button type="button" onClick={requestClose}>
             Close
           </button>
         </div>
@@ -529,7 +543,9 @@ export function ImportWizard({
             {done ? (
               <div>
                 <p>
-                  Import complete: {totals.imported} imported, {totals.skipped} skipped.
+                  {errors.length > 0
+                    ? `Import stopped: ${totals.imported} imported, ${totals.skipped} skipped, ${shownRows} not imported.`
+                    : `Import complete: ${totals.imported} imported, ${totals.skipped} skipped.`}
                 </p>
                 <button type="button" onClick={onClose}>
                   Done
@@ -537,12 +553,28 @@ export function ImportWizard({
               </div>
             ) : (
               <>
-                <p>
-                  {validCount} row{validCount === 1 ? '' : 's'} valid.
-                  {errors.length > 0 &&
-                    ` ${committed || !report ? errors.length : report.error_total} error${(committed || !report ? errors.length : report.error_total) === 1 ? '' : 's'} to resolve.`}
-                  {blankSkipped > 0 && ` ${blankSkipped} blank line${blankSkipped === 1 ? '' : 's'} skipped.`}
-                </p>
+                {committed ? (
+                  <div className="notice" role="status">
+                    <p>
+                      <strong>
+                        {totals.imported} row{totals.imported === 1 ? '' : 's'} imported.
+                      </strong>{' '}
+                      {shownRows} row{shownRows === 1 ? '' : 's'} still {shownRows === 1 ? 'has' : 'have'} errors
+                      {totals.skipped > 0 && `, and ${totals.skipped} ${totals.skipped === 1 ? 'was' : 'were'} skipped`}.
+                    </p>
+                    <p>
+                      Fix or skip the rows below and import them, or close to leave them out. Imported rows stay either
+                      way, so there is no going back to the mapping.
+                    </p>
+                  </div>
+                ) : (
+                  <p>
+                    {validCount} row{validCount === 1 ? '' : 's'} valid.
+                    {errors.length > 0 &&
+                      ` ${report ? report.error_total : errors.length} error${(report ? report.error_total : errors.length) === 1 ? '' : 's'} to resolve.`}
+                    {blankSkipped > 0 && ` ${blankSkipped} blank line${blankSkipped === 1 ? '' : 's'} skipped.`}
+                  </p>
+                )}
                 {wrongSchema && report && (
                   <div className="notice warning-list" role="alert">
                     <p>
@@ -631,10 +663,10 @@ export function ImportWizard({
                 )}
                 <button
                   type="button"
-                  disabled={busy || (wrongSchema && !confirmedAnyway)}
+                  disabled={busy || (wrongSchema && !confirmedAnyway) || nothingToApply}
                   onClick={() => void confirmImport()}
                 >
-                  {errors.length > 0 ? 'Fix/skip and import' : 'Confirm import'}
+                  {committed ? 'Import fixed rows' : errors.length > 0 ? 'Fix/skip and import' : 'Confirm import'}
                 </button>
               </>
             )}
