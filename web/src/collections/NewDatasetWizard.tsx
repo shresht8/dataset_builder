@@ -16,6 +16,7 @@ import {
   ApiError,
   createDataset,
   deleteDataset,
+  deleteStoreEntry,
   getSchema,
   inferSchema,
   listStore,
@@ -266,6 +267,34 @@ export function NewDatasetWizard({ collection, initialFolderId = null, onClose, 
     }
   }
 
+  // GL-138: back from the import (nothing imported yet) to the schema step. The
+  // dataset already exists, so remove it, plus the store entry its creation
+  // added, and let the next "Create dataset" make it again with the new choice.
+  async function backToSchema(): Promise<string | null> {
+    const dataset = item?.dataset
+    if (!dataset) return null
+    try {
+      await deleteDataset(dataset.id)
+    } catch (err) {
+      return errorMessage(err, 'Could not go back')
+    }
+    let kept: string | null = null
+    if (collection && dataset.store_schema?.created) {
+      try {
+        await deleteStoreEntry(collection.id, dataset.store_schema.id)
+      } catch (err) {
+        kept = `The store schema "${dataset.store_schema.name}" was kept: ${errorMessage(err, 'delete failed')}`
+      }
+    }
+    patchItem({ dataset: undefined })
+    setImportColumns(null)
+    setOutcome(null)
+    setError(kept)
+    onChanged()
+    setStep('schema')
+    return null
+  }
+
   function skipItem() {
     if (item?.dataset) {
       setOfferDelete(true)
@@ -293,6 +322,7 @@ export function NewDatasetWizard({ collection, initialFolderId = null, onClose, 
             columns={importColumns}
             initialFile={item.file}
             initialRecordsKey={recordsKey}
+            onBack={backToSchema}
             onImported={() => {
               setImported(true)
               patchItem({ status: 'imported' })
