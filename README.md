@@ -1,7 +1,8 @@
 # Groundline — Dataset Builder
 
-Tabular annotation tool that produces versioned evaluation datasets. See the
-design doc: [docs/groundline-dataset-builder.md](docs/groundline-dataset-builder.md).
+Tabular annotation tool that produces versioned evaluation datasets. Repo map
+(architecture, DB, backend, frontend, CLI, features):
+[docs/architecture.md](docs/architecture.md).
 
 ## Components
 
