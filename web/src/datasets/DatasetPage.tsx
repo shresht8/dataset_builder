@@ -8,7 +8,7 @@
 // itself (GL-3.5-18). Phase 4: a breadcrumb back to the dataset's collection
 // and folders, the Schema panel (GL-120) and moving the dataset (GL-119).
 import { createColumnHelper, flexRender, tableFeatures, useTable } from '@tanstack/react-table'
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type FocusEvent, type KeyboardEvent, type ReactNode } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import {
   ApiError,
@@ -133,6 +133,9 @@ export function DatasetPage() {
   const [pendingData, setPendingData] = useState<Record<string, unknown> | null>(null)
   const [activeCell, setActiveCell] = useState<CellCoord | null>(null)
   const [editingCell, setEditingCell] = useState<CellCoord | null>(null)
+  // The cell being edited, readable synchronously: a blur that follows Enter,
+  // Tab or Escape must see that the edit already ended and not save it again.
+  const editingRef = useRef<CellCoord | null>(null)
   const [draft, setDraft] = useState<unknown>(null)
   const [drawerRowId, setDrawerRowId] = useState<string | null>(null)
   const [drawerFocusKey, setDrawerFocusKey] = useState<string | undefined>(undefined)
@@ -158,6 +161,8 @@ export function DatasetPage() {
   const [deleteDatasetOpen, setDeleteDatasetOpen] = useState(false)
   const [rowToDelete, setRowToDelete] = useState<Row | null>(null)
   const cellRefs = useRef(new Map<string, HTMLTableCellElement>())
+  // Set when an edit is saved because focus moved to another element.
+  const savedOnBlurRef = useRef(false)
 
   useEffect(() => {
     if (!datasetId) return
@@ -276,7 +281,11 @@ export function DatasetPage() {
   // Roving tabindex: move real DOM focus to the active cell whenever nothing
   // else (an inline editor, the drawer, or a panel/dialog) currently owns it.
   useEffect(() => {
-    if (editingCell || drawerRowId || commentsRowId || conflict || !activeCell) return
+    // An edit saved because focus moved elsewhere (another cell, the search
+    // box, the toolbar) leaves focus where the user put it.
+    const keepFocus = savedOnBlurRef.current
+    savedOnBlurRef.current = false
+    if (keepFocus || editingCell || drawerRowId || commentsRowId || conflict || !activeCell) return
     cellRefs.current.get(`${activeCell.rowId}:${activeCell.colKey}`)?.focus()
   }, [activeCell, editingCell, drawerRowId, commentsRowId, conflict])
 
@@ -402,22 +411,48 @@ export function DatasetPage() {
     const column = orderedColumns.find((col) => col.key === coord.colKey)
     if (!column || !canEditCell(coord, column)) return
     setDraft(initialDraft(column, getCellValue(coord)))
+    editingRef.current = coord
     setEditingCell(coord)
+  }
+
+  /** End the edit without saving (Escape). */
+  function cancelEdit() {
+    if (editingRef.current) setCellError(editingRef.current, null)
+    editingRef.current = null
+    setEditingCell(null)
   }
 
   // Returns false when the draft is refused (an invalid date stays in edit
   // mode with an inline error instead of being saved).
   function commitEdit(): boolean {
-    if (!editingCell) return false
-    const column = columnsByKey.get(editingCell.colKey)
+    const cell = editingRef.current
+    if (!cell) return false
+    const column = columnsByKey.get(cell.colKey)
     if (column?.type === 'date' && typeof draft === 'string' && draft.trim() !== '' && !isDate(draft.trim())) {
-      setCellError(editingCell, DATE_HINT)
+      setCellError(cell, DATE_HINT)
       return false
     }
-    setCellError(editingCell, null)
-    saveCell(editingCell, column?.type === 'date' && typeof draft === 'string' ? draft.trim() : draft)
+    setCellError(cell, null)
+    saveCell(cell, column?.type === 'date' && typeof draft === 'string' ? draft.trim() : draft)
+    editingRef.current = null
     setEditingCell(null)
     return true
+  }
+
+  // Focus leaving the cell being edited saves it, the same as Tab (GL-136):
+  // clicking another cell, the toolbar or the page must not drop the edit.
+  // A refused draft (invalid date) keeps the editor open and takes focus back.
+  function handleEditorBlur(event: FocusEvent<HTMLTableCellElement>, coord: CellCoord) {
+    const editing = editingRef.current
+    if (!editing || editing.rowId !== coord.rowId || editing.colKey !== coord.colKey) return
+    const next = event.relatedTarget
+    const cell = event.currentTarget
+    if (next instanceof Node && cell.contains(next)) return
+    if (commitEdit()) {
+      savedOnBlurRef.current = next instanceof Node
+      return
+    }
+    window.setTimeout(() => cell.querySelector<HTMLElement>('input, select, textarea, [tabindex="-1"]')?.focus(), 0)
   }
 
   function toggleBoolean(coord: CellCoord) {
@@ -457,9 +492,10 @@ export function DatasetPage() {
   }
 
   function handleCellFocus(coord: CellCoord) {
-    if (editingCell && (editingCell.rowId !== coord.rowId || editingCell.colKey !== coord.colKey)) {
-      setEditingCell(null)
-    }
+    // The blur before this focus has already saved the edit; one still open
+    // here was refused (invalid date) and takes focus back, so stay on it.
+    const editing = editingRef.current
+    if (editing && (editing.rowId !== coord.rowId || editing.colKey !== coord.colKey)) return
     if (!activeCell || activeCell.rowId !== coord.rowId || activeCell.colKey !== coord.colKey) {
       setActiveCell(coord)
     }
@@ -510,8 +546,7 @@ export function DatasetPage() {
         commitEdit()
       } else if (event.key === 'Escape') {
         event.preventDefault()
-        setCellError(editingCell, null)
-        setEditingCell(null)
+        cancelEdit()
       } else if (event.key === 'Tab') {
         event.preventDefault()
         if (commitEdit()) moveActive(0, event.shiftKey ? -1 : 1)
@@ -581,7 +616,7 @@ export function DatasetPage() {
                 draft={Array.isArray(draft) ? (draft as string[]) : []}
                 onDraftChange={setDraft}
                 onCommit={commitEdit}
-                onCancel={() => setEditingCell(null)}
+                onCancel={cancelEdit}
                 onTab={(shiftKey) => {
                   commitEdit()
                   moveActive(0, shiftKey ? -1 : 1)
@@ -703,6 +738,7 @@ export function DatasetPage() {
                       tabIndex={isActive ? 0 : -1}
                       className={`grid-cell${isActive ? ' active' : ''}`}
                       onFocus={() => handleCellFocus(coord)}
+                      onBlur={(event) => handleEditorBlur(event, coord)}
                       onDoubleClick={() => {
                         if (opensDrawer(column)) openDrawer(coord.rowId, coord.colKey)
                         else if (column.type !== 'boolean') startEdit(coord)
