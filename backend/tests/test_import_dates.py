@@ -96,10 +96,10 @@ def test_csv_strings(client, dataset_id):
     assert result["imported"] == 1
     assert _rows(dataset_id) == [{"name": "ok", "as_of": "2024-02-29"}]
     reasons = _reasons(result)
-    assert "has a time component" in reasons[2]
-    assert "has a time component" in reasons[3]
-    assert reasons[4] == "expected a date as YYYY-MM-DD, got '01/02/2024'"
-    assert reasons[5] == "expected a date as YYYY-MM-DD, got 'Jan 2 2024'"
+    assert "has a time. Use YYYY-MM-DD" in reasons[2]
+    assert "has a time. Use YYYY-MM-DD" in reasons[3]
+    assert reasons[4] == '"01/02/2024" is not a date. Use YYYY-MM-DD'
+    assert reasons[5] == '"Jan 2 2024" is not a date. Use YYYY-MM-DD'
 
 
 def test_xlsx_cells(client, dataset_id):
@@ -119,10 +119,10 @@ def test_xlsx_cells(client, dataset_id):
         {"name": "text cell", "as_of": "2024-03-01"},
     ]
     reasons = _reasons(result)
-    assert reasons[2] == "2024-01-02 10:30:00 has a time component"
-    assert reasons[3] == "a time is not a date"
-    assert reasons[4] == "a time is not a date"
-    assert reasons[5] == "expected a date as YYYY-MM-DD, got '45000'"
+    assert reasons[2] == '"2024-01-02 10:30:00" has a time. Use YYYY-MM-DD'
+    assert reasons[3] == "a time is not a date. Use YYYY-MM-DD"
+    assert reasons[4] == "a time is not a date. Use YYYY-MM-DD"
+    assert reasons[5] == '"45000" is not a date. Use YYYY-MM-DD'
 
 
 def test_xlsx_1904_date_system(client, dataset_id):
@@ -142,14 +142,14 @@ def test_json_and_yaml_values(client, dataset_id):
     result = _commit(client, dataset_id, "d.json", content)
     assert result["imported"] == 1
     reasons = _reasons(result)
-    assert reasons[2] == "20240229 is a number, not a date (write YYYY-MM-DD)"
-    assert "has a time component" in reasons[3]
+    assert reasons[2] == "20240229 is a number, not a date. Use YYYY-MM-DD"
+    assert "has a time. Use YYYY-MM-DD" in reasons[3]
 
     # Unquoted YAML dates stay text (the shared reader never builds date objects).
     content = b"- {name: plain, as_of: 2024-03-01}\n- {name: plain dt, as_of: 2024-03-01 03:04:05}\n"
     result = _commit(client, dataset_id, "d.yaml", content)
     assert result["imported"] == 1
-    assert "has a time component" in _reasons(result)[2]
+    assert "has a time. Use YYYY-MM-DD" in _reasons(result)[2]
     assert {"name": "plain", "as_of": "2024-03-01"} in _rows(dataset_id)
 
 
@@ -160,7 +160,7 @@ def test_inline_fixes_use_the_same_rules(client, dataset_id):
         fixes={"1": {"as_of": "2024-01-02"}, "2": {"as_of": "2024-01-02 09:00"}, "3": {"as_of": " 2024-01-03 "}},
     )
     assert result["imported"] == 2
-    assert "has a time component" in _reasons(result)[2]
+    assert "has a time. Use YYYY-MM-DD" in _reasons(result)[2]
     assert [r["as_of"] for r in _rows(dataset_id)] == ["2024-01-02", "2024-01-03"]
 
 

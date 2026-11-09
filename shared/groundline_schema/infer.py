@@ -89,7 +89,7 @@ def _why_not_key(field: str, values: list[Any], present: int, total: int) -> str
             repeated.append(value)
         seen.add(value)
     if repeated:
-        shown = ", ".join(f"'{v}'" for v in repeated[:3])
+        shown = ", ".join(f'"{v}"' for v in repeated[:3])
         more = f" and {len(repeated) - 3} more" if len(repeated) > 3 else ""
         reasons.append(f"repeated values {shown}{more}")
     not_text = sum(1 for v in values if not isinstance(v, str))
@@ -98,7 +98,7 @@ def _why_not_key(field: str, values: list[Any], present: int, total: int) -> str
     padded = sum(1 for v in texts if v.strip() != v)
     if padded:
         reasons.append(f"{_plural(padded, 'value')} with leading or trailing spaces")
-    return f"'{field}' can't be the key: " + "; ".join(reasons)
+    return f"\"{field}\" can't be the key: " + "; ".join(reasons)
 
 
 def infer_columns(records: list[dict], key: str | None = None) -> tuple[list[dict], list[str]]:

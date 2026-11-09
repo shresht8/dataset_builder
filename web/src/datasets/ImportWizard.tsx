@@ -5,7 +5,7 @@
 // JSON / JSONL / YAML (GL-3.5-6): nested records arrive as dotted source
 // columns; the API reports which list the records came from (and offers the
 // candidates when it can't tell). Import stays create-only: a key that
-// already exists is a row error pointing at `rows push`.
+// already exists is a row error ("import only adds new rows, so skip this row").
 //
 // The backend's `POST /import` (GL-2-8) has no server-side import session:
 // each call re-parses the whole file and re-applies `skip`/`fixes` from

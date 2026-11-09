@@ -90,7 +90,7 @@ def test_approving_an_invalid_row_is_refused_with_the_row_and_reasons(client, ds
     detail = resp.json()["detail"]
     assert isinstance(detail, str)
     assert detail.startswith("Row 'r2' can't be approved: ")
-    assert "score: expected a number, got str" in detail and "colour: is required" in detail
+    assert 'score: "abc" is not a number' in detail and "colour: is required" in detail
     assert _row(client, ds, row_id)["status"] == "draft"
 
 
@@ -199,7 +199,7 @@ def test_cut_with_a_broken_approved_row_is_refused_and_leaves_nothing(client, ds
     resp = client.post(f"/v1/datasets/{ds}/versions", json={})
     assert resp.status_code == 422, resp.text
     detail = resp.json()["detail"]
-    assert isinstance(detail, str) and "Row 'old'" in detail and "score: expected a number" in detail
+    assert isinstance(detail, str) and "Row 'old'" in detail and "is not a number" in detail
     assert "1 selected row" in detail
     assert _versions(ds) == [] and _objects(storage_bucket, ds) == []
 

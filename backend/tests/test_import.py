@@ -147,7 +147,7 @@ def test_import_commit_csv_creates_valid_rows_and_reports_invalid(client, as_rol
     assert body["imported"] == 2
     assert body["skipped"] == 0
     assert body["errors"] == [
-        {"row": 3, "column": "score", "reason": "expected a number, got str"}
+        {"row": 3, "column": "score", "reason": '"not-a-number" is not a number'}
     ]
 
     resp = client.get(f"/v1/datasets/{dataset_id}/rows")

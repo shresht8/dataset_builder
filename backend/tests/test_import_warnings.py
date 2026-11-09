@@ -144,7 +144,7 @@ def test_infer_explains_why_id_is_not_the_key(client, as_role):
     body = resp.json()
     assert body["record_count"] == 5
     assert (
-        "'id' can't be the key: 1 record without one; repeated values 'a'"
+        "\"id\" can't be the key: 1 record without one; repeated values \"a\""
         in body["warnings"]
     )
 
@@ -167,7 +167,7 @@ def test_why_not_key_names_each_reason():
     _, warnings = infer_columns([{"id": 1}, {"id": " b "}, {"id": "c"}, {"id": "c"}])
     assert warnings == [
         NO_KEY,
-        "'id' can't be the key: repeated values 'c'; 1 value not text; 1 value with leading or trailing spaces",
+        "\"id\" can't be the key: repeated values \"c\"; 1 value not text; 1 value with leading or trailing spaces",
     ]
     _, warnings = infer_columns([{"q": "x"}])
     assert warnings == [NO_KEY]  # no `id` field: nothing to explain

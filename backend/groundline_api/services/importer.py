@@ -79,7 +79,7 @@ from openpyxl.utils.exceptions import InvalidFileException
 
 from groundline_api.config import settings
 from groundline_api.models.dataset import DatasetColumn
-from groundline_api.services.validation import key_column, row_errors
+from groundline_api.services.validation import key_column, row_errors, show_value
 
 SAMPLE_SIZE = 20
 # CSV delimiters tried by `detect_delimiter`, in order of preference on a tie.
@@ -364,22 +364,22 @@ def _coerce_date(value: Any) -> Any:
     """Coerce one value for a date column (see the module docstring)."""
     if isinstance(value, dt.datetime):
         if value.time() != dt.time(0):
-            raise _CoercionError(f"{value.isoformat(sep=' ')} has a time component")
+            raise _CoercionError(f"{show_value(value.isoformat(sep=' '))} has a time. Use YYYY-MM-DD")
         return value.date().isoformat()
     if isinstance(value, dt.date):
         return value.isoformat()
     if isinstance(value, (dt.time, dt.timedelta)):
-        raise _CoercionError("a time is not a date")
+        raise _CoercionError("a time is not a date. Use YYYY-MM-DD")
     if isinstance(value, (bool, int, float)):
-        raise _CoercionError(f"{value!r} is a number, not a date (write YYYY-MM-DD)")
+        raise _CoercionError(f"{show_value(value)} is a number, not a date. Use YYYY-MM-DD")
     if isinstance(value, str):
         text = value.strip()
         if is_date(text):
             return text
         if _HAS_TIME.match(text):
-            raise _CoercionError(f"{text!r} has a time component")
+            raise _CoercionError(f"{show_value(text)} has a time. Use YYYY-MM-DD")
         return str(value)  # validation names the expected YYYY-MM-DD form
-    raise _CoercionError("map this to a json column")
+    raise _CoercionError("a list or object can only go in a json column")
 
 
 def _coerce_typed(value: Any, col_type: ColumnType) -> Any:
@@ -405,7 +405,7 @@ def _coerce_typed(value: Any, col_type: ColumnType) -> Any:
         return value
     if isinstance(value, list) and col_type == ColumnType.MULTI_SELECT:
         return [str(item) if isinstance(item, PlainScalar) else item for item in value]
-    raise _CoercionError("map this to a json column")
+    raise _CoercionError("a list or object can only go in a json column")
 
 
 def map_row(
@@ -476,11 +476,19 @@ class _KeyCheck:
         key = self.column.key
         if value in self.first_row:
             self.last = "repeated"
-            return [(key, f"duplicate key '{value}' in file (also row {self.first_row[value]})")]
+            reason = (
+                f"{show_value(value)} is also the key of row {self.first_row[value]}."
+                " Keys must be unique, so skip one of the two rows"
+            )
+            return [(key, reason)]
         self.first_row[value] = index
         if value in self.existing:
             self.last = "existing"
-            return [(key, f"key '{value}' already exists — use rows push to update")]
+            reason = (
+                f"{show_value(value)} is already in this dataset."
+                " Import only adds new rows, so skip this row"
+            )
+            return [(key, reason)]
         return []
 
 

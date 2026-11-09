@@ -23,7 +23,7 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
-from groundline_schema.infer import InferError, infer_columns
+from groundline_schema.infer import NO_KEY, InferError, infer_columns
 from groundline_schema.paths import PathError
 from groundline_schema.records import (
     STRUCTURED_SUFFIXES,
@@ -39,6 +39,12 @@ from groundline_api.models.user import Role, User
 from groundline_api.services import importer
 
 router = APIRouter(prefix="/schema", tags=["schema"])
+
+WEB_NO_KEY = (
+    "No key column yet. A key gives each row a unique name, such as an id, so later"
+    " imports can tell new rows from existing ones. Tick Key column on a column whose"
+    " values are all different and never empty."
+)
 
 
 def _cell(value: Any) -> Any:
@@ -100,6 +106,8 @@ async def infer_schema(
     except (InferError, PathError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
 
+    # The CLI's NO_KEY names `--key`; the web picks the key in the schema step (GL-148).
+    warnings = [WEB_NO_KEY if w == NO_KEY else w for w in warnings]
     columns = []
     for column in drafted:
         comment = column.pop("_comment", None)
