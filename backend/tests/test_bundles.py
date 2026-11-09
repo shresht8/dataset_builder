@@ -263,3 +263,30 @@ def test_bundle_rbac(client, as_role, cleanup):
     as_role("annotator")
     assert _post(client, "/v1/collections/import/preview", content, f"n-{_tag()}").status_code == 403
     assert _post(client, "/v1/collections/import", content, f"n-{_tag()}").status_code == 403
+
+
+def test_round_trip_empty_dataset_and_empty_record(client, as_role, cleanup):
+    """GL-133: the import-wizard blocks live in the routes, so bundle import still
+    accepts a dataset with no rows (required column, no header) and a `{}` record."""
+    as_role("editor")
+    c = client.post("/v1/collections", json={"name": f"b-{_tag()}"}).json()
+    cleanup["collections"].append(c["id"])
+    required = [{"key": "id", "label": "Id", "type": "text", "required": True}]
+    optional = [{"key": "note", "label": "Note", "type": "text"}]
+    empty = client.post(
+        "/v1/datasets", json={"name": "empty", "collection_id": c["id"], "columns": required}
+    )
+    assert empty.status_code == 201, empty.text
+    loose = client.post(
+        "/v1/datasets", json={"name": "loose", "collection_id": c["id"], "columns": optional}
+    ).json()
+    resp = client.post(f"/v1/datasets/{loose['id']}/rows", json={"data": {}})
+    assert resp.status_code == 201, resp.text
+
+    content = _export(client, c["id"]).content
+    new_name = f"copy-{_tag()}"
+    resp = _post(client, "/v1/collections/import", content, new_name)
+    assert resp.status_code == 201, resp.text
+    copy = resp.json()
+    cleanup["collections"].append(copy["id"])
+    assert copy["dataset_count"] == 2

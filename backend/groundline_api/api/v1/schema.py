@@ -24,10 +24,11 @@ from groundline_api.deps import get_db, require_role
 from groundline_api.models.collection import CollectionSchema
 from groundline_api.models.dataset import Dataset
 from groundline_api.models.user import Role, User
-from groundline_api.schemas.column import SchemaRead, SchemaUpdate
+from groundline_api.schemas.column import SchemaDryRun, SchemaProblem, SchemaRead, SchemaUpdate
 from groundline_api.schemas.dataset import SchemaApply, StoreSchemaRef
 from groundline_api.services import store
 from groundline_api.services.columns import active_wire_columns, columns_of, to_wire
+from groundline_api.services.schema_impact import SchemaImpactError
 
 router = APIRouter(prefix="/datasets", tags=["schema"])
 
@@ -37,6 +38,28 @@ def _get_dataset_or_404(db: Session, dataset_id: uuid.UUID) -> Dataset:
     if dataset is None:
         raise HTTPException(status_code=404, detail="dataset not found")
     return dataset
+
+
+def _dry_run(db: Session, run) -> SchemaDryRun:
+    """Run a schema write, then roll it back: report what it would do (GL-134).
+
+    Only the "would break rows" refusal becomes a report; any other 422 (bad
+    columns, key column) is raised as it would be for a real write.
+    """
+    try:
+        run()
+    except SchemaImpactError as exc:
+        db.rollback()
+        return SchemaDryRun(
+            ok=False,
+            detail=str(exc.detail),
+            problems=[SchemaProblem(**p.as_dict()) for p in exc.problems],
+        )
+    except HTTPException:
+        db.rollback()
+        raise
+    db.rollback()
+    return SchemaDryRun(ok=True)
 
 
 def _store_ref(db: Session, dataset: Dataset, created: bool = False) -> StoreSchemaRef | None:
@@ -60,20 +83,26 @@ def get_schema(
     return SchemaRead(columns=[to_wire(c) for c in columns], store_schema=_store_ref(db, dataset))
 
 
-@router.put("/{dataset_id}/schema", response_model=SchemaRead)
+@router.put("/{dataset_id}/schema", response_model=SchemaRead | SchemaDryRun)
 def put_schema(
     dataset_id: uuid.UUID,
     payload: SchemaUpdate,
     db: Annotated[Session, Depends(get_db)],
     user: Annotated[User, Depends(require_role(Role.EDITOR))],
-) -> SchemaRead:
+    dry_run: bool = False,
+) -> SchemaRead | SchemaDryRun:
     """Replace/upsert the column set.
 
     Keys present are upserted (re-adding an archived key un-archives it);
     keys absent are archived — never hard-deleted — so old rows and version
     snapshots stay interpretable. `order` follows list position.
+
+    A change that would break stored rows is refused with 422 (GL-134).
+    `?dry_run=true` runs every check and writes nothing.
     """
     dataset = _get_dataset_or_404(db, dataset_id)
+    if dry_run:
+        return _dry_run(db, lambda: store.set_dataset_schema(db, dataset, payload.columns, user))
     try:
         outcome = store.set_dataset_schema(db, dataset, payload.columns, user)
     except HTTPException:
@@ -86,13 +115,14 @@ def put_schema(
     )
 
 
-@router.post("/{dataset_id}/schema/apply", response_model=SchemaRead)
+@router.post("/{dataset_id}/schema/apply", response_model=SchemaRead | SchemaDryRun)
 def apply_schema(
     dataset_id: uuid.UUID,
     payload: SchemaApply,
     db: Annotated[Session, Depends(get_db)],
     _user: Annotated[User, Depends(require_role(Role.EDITOR))],
-) -> SchemaRead:
+    dry_run: bool = False,
+) -> SchemaRead | SchemaDryRun:
     """Switch a collection dataset to another entry of its store (D8 rules)."""
     dataset = _get_dataset_or_404(db, dataset_id)
     if dataset.collection_id is None:
@@ -104,6 +134,8 @@ def apply_schema(
         raise HTTPException(
             status_code=422, detail="store schema does not belong to the dataset's collection"
         )
+    if dry_run:
+        return _dry_run(db, lambda: store.apply(db, dataset, entry))
     try:
         store.apply(db, dataset, entry)
     except HTTPException:

@@ -185,16 +185,36 @@ export interface ImportValidationError {
   reason: string
 }
 
+export interface ImportColumnProblem {
+  column: string // "" = the record as a whole
+  rows: number
+  reason: string
+}
+
 export interface ImportValidationReport {
   valid: number
+  // At most 200 rows' worth; the fields below are exact totals (GL-133).
   errors: ImportValidationError[]
+  error_total: number
+  failed_rows: number
+  checked_rows: number // total rows minus blank lines
+  by_column: ImportColumnProblem[]
+}
+
+export interface ImportCompatibility {
+  matched: string[]
+  ignored_source_columns: string[]
+  unfilled_schema_columns: string[]
+  required_without_source: string[]
 }
 
 export interface ImportPreviewResponse {
   columns: string[]
   suggested_mapping: Record<string, string>
   sample_rows: ImportSampleRow[]
-  total_rows: number
+  total_rows: number // includes blank CSV/XLSX lines
+  blank_skipped: number
+  compatibility: ImportCompatibility
   validation: ImportValidationReport | null
   // JSON/YAML only: the key the records were read from, and the other
   // top-level keys that were ignored.
@@ -206,6 +226,7 @@ export interface ImportCommitResponse {
   imported: number
   skipped: number
   errors: ImportValidationError[]
+  blank_skipped: number
 }
 
 // Mirrors backend/groundline_api/schemas/version.py (§6, §8, GL-3-2/3).

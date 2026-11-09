@@ -116,9 +116,12 @@ class ApiClient:
             json={"collection_id": collection_id, "folder_id": folder_id},
         ).json()
 
-    def apply_schema(self, dataset_id: str, store_schema_id: str) -> dict:
+    def apply_schema(self, dataset_id: str, store_schema_id: str, dry_run: bool = False) -> dict:
         return self._request(
-            "POST", f"/datasets/{dataset_id}/schema/apply", json={"store_schema_id": store_schema_id}
+            "POST",
+            f"/datasets/{dataset_id}/schema/apply",
+            json={"store_schema_id": store_schema_id},
+            params={"dry_run": "true"} if dry_run else None,
         ).json()
 
     # --- Collections, folders, store (Phase 4) ---------------------------------
@@ -190,9 +193,12 @@ class ApiClient:
             "POST", path, files={"file": ("bundle.zip", content, "application/zip")}
         ).json()
 
-    def put_schema(self, dataset_id: str, columns: list[dict]) -> dict:
+    def put_schema(self, dataset_id: str, columns: list[dict], dry_run: bool = False) -> dict:
         return self._request(
-            "PUT", f"/datasets/{dataset_id}/schema", json={"columns": columns}
+            "PUT",
+            f"/datasets/{dataset_id}/schema",
+            json={"columns": columns},
+            params={"dry_run": "true"} if dry_run else None,
         ).json()
 
     def list_rows(self, dataset_id: str) -> list[dict]:

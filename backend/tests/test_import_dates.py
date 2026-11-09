@@ -167,7 +167,7 @@ def test_inline_fixes_use_the_same_rules(client, dataset_id):
 def test_a_fix_replaces_a_coercion_failure(client, dataset_id):
     content = json.dumps([{"name": "x", "as_of": 20240229}]).encode()
     result = _commit(client, dataset_id, "d.json", content, fixes={"1": {"as_of": "2024-02-29"}})
-    assert result == {"imported": 1, "skipped": 0, "errors": []}
+    assert result == {"imported": 1, "skipped": 0, "errors": [], "blank_skipped": 0}
 
 
 def test_csv_and_xlsx_with_the_same_dates_give_identical_rows(client, as_role, dataset_id):

@@ -84,6 +84,14 @@ def _summarise(current_columns: list[dict], new_columns: list[dict]) -> tuple[bo
     return True, archived
 
 
+def _check_dry_run(result: dict) -> None:
+    """Exit non-zero with the server's message when the change would break stored rows (GL-134)."""
+    if "ok" not in result:  # an older server ignores ?dry_run and applies the change
+        fail("this server does not support dry runs: the change was applied")
+    if not result["ok"]:
+        fail(str(result.get("detail") or "the change would break stored rows"))
+
+
 def _confirm_archive(archived: list[str], yes: bool) -> None:
     if archived and not yes:
         typer.confirm(
@@ -111,7 +119,13 @@ def push(
     with api() as client:
         dataset_id = client.resolve_dataset_id(name)
         changes, archived = _summarise(client.get_schema(dataset_id)["columns"], new_columns)
-        if dry_run or not changes:
+        if not changes:
+            return
+        # Ask the server first: a change that would break stored rows is refused
+        # before the archive prompt, not after it.
+        _check_dry_run(client.put_schema(dataset_id, new_columns, dry_run=True))
+        if dry_run:
+            typer.echo("ok: no stored row would break")
             return
         _confirm_archive(archived, yes)
         result = client.put_schema(dataset_id, new_columns)
@@ -126,6 +140,7 @@ def push(
 def apply(
     name: str = typer.Argument(..., help="collection/.../dataset path"),
     entry: str = typer.Argument(..., help="store schema to switch to"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="show the changes, apply nothing"),
     yes: bool = typer.Option(False, "--yes", help="don't ask before archiving columns"),
 ) -> None:
     """Switch a collection dataset to another schema from its collection's store."""
@@ -137,6 +152,10 @@ def apply(
         current = client.get_schema(dataset["id"])["columns"]
         changes, archived = _summarise(current, target["columns"])
         if not changes and dataset.get("store_schema_id") == target["id"]:
+            return
+        _check_dry_run(client.apply_schema(dataset["id"], target["id"], dry_run=True))
+        if dry_run:
+            typer.echo("ok: no stored row would break")
             return
         _confirm_archive(archived, yes)
         client.apply_schema(dataset["id"], target["id"])

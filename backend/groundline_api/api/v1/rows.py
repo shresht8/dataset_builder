@@ -44,7 +44,14 @@ from groundline_api.schemas.row import (
     RowRead,
     RowsDelete,
 )
-from groundline_api.services.validation import key_column, validate_row_data
+from groundline_api.services.sync import _canonical
+from groundline_api.services.validation import (
+    describe_errors,
+    key_column,
+    row_errors,
+    row_label,
+    validate_row_data,
+)
 
 router = APIRouter(prefix="/datasets", tags=["rows"])
 
@@ -256,6 +263,17 @@ def patch_row(
     changes: list[tuple[str, Any, Any]] = []
     claimed_key: str | None = None  # a new key value this patch takes, if any
 
+    # Approve gate (GL-135): a request that moves a row to approved needs a row
+    # that is valid as a whole, as it would be after this same request's edit.
+    if payload.status == RowStatus.APPROVED:
+        final_data = {**row.data, **payload.data} if payload.data is not None else row.data
+        problems = row_errors(final_data, _columns_of(db, dataset_id))
+        if problems:
+            raise HTTPException(
+                status_code=422,
+                detail=f"{row_label(row)} can't be approved: {describe_errors(problems)}",
+            )
+
     if payload.data is not None:
         merged_data = {**row.data, **payload.data}
         columns = _columns_of(db, dataset_id)
@@ -272,9 +290,14 @@ def patch_row(
             row.row_key = merged_data[key_col.key]
         for key, new_value in payload.data.items():
             old_value = row.data.get(key)
-            if old_value != new_value:
+            if _canonical(old_value) != _canonical(new_value):  # as sync compares: 1, 1.0, true differ
                 changes.append((key, old_value, new_value))
         row.data = merged_data
+        # An approved row whose data really changed goes back to review, whoever
+        # edits it, unless the request names a status itself (sync does the same).
+        if changes and row.status == RowStatus.APPROVED and payload.status is None:
+            changes.append(("status", RowStatus.APPROVED.value, RowStatus.NEEDS_REVIEW.value))
+            row.status = RowStatus.NEEDS_REVIEW
 
     if payload.status is not None:
         if row.status != payload.status:

@@ -43,6 +43,8 @@ class FakeApi:
         self.schema_put_status = schema_put_status
         self.create_status = create_status
         self.schema = [dict(c) for c in COLUMNS]
+        # What `PUT .../schema?dry_run=true` answers (GL-134).
+        self.dry_run_result: dict = {"ok": True, "problems": []}
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
@@ -59,6 +61,8 @@ class FakeApi:
         if path == "/v1/datasets/ds1/schema" and method == "GET":
             return httpx.Response(200, json={"columns": self.schema})
         if path == "/v1/datasets/ds1/schema" and method == "PUT":
+            if request.url.params.get("dry_run"):
+                return httpx.Response(200, json=self.dry_run_result)
             if self.schema_put_status != 200:
                 return httpx.Response(self.schema_put_status, json={"detail": "duplicate column key: 'x'"})
             return httpx.Response(200, json=json.loads(request.content))
@@ -69,7 +73,17 @@ class FakeApi:
         return httpx.Response(404, json={"detail": "not found"})
 
     def calls(self, method: str, path: str) -> list[httpx.Request]:
-        return [r for r in self.requests if r.method == method and r.url.path == path]
+        """Real calls; dry runs are listed by `dry_calls`."""
+        return [
+            r for r in self.requests
+            if r.method == method and r.url.path == path and not r.url.params.get("dry_run")
+        ]
+
+    def dry_calls(self, method: str, path: str) -> list[httpx.Request]:
+        return [
+            r for r in self.requests
+            if r.method == method and r.url.path == path and r.url.params.get("dry_run")
+        ]
 
 
 def _result(**overrides) -> dict:
@@ -220,6 +234,9 @@ def test_schema_push_dry_run_prompt_and_yes(env, install_transport):
 
     result = runner.invoke(app, ["schema", "push", "demo", str(path), "--dry-run"])
     assert result.exit_code == 0
+    assert "ok: no stored row would break" in result.output
+    assert len(api.dry_calls("PUT", "/v1/datasets/ds1/schema")) == 1
+    assert not api.calls("PUT", "/v1/datasets/ds1/schema")
     assert "added: new" in result.output
     assert "changed: question" in result.output
     assert "archived: expected.calls" in result.output
@@ -231,6 +248,38 @@ def test_schema_push_dry_run_prompt_and_yes(env, install_transport):
     result = runner.invoke(app, ["schema", "push", "demo", str(path), "--yes"])
     assert result.exit_code == 0, result.output
     assert len(api.calls("PUT", "/v1/datasets/ds1/schema")) == 1
+
+
+def test_schema_push_refused_by_the_server_prints_why_and_exits(env, install_transport):
+    api = FakeApi()
+    api.dry_run_result = {
+        "ok": False,
+        "detail": "Values in column 'question' (3 rows, e.g. 'a') can't be converted in place",
+        "problems": [],
+    }
+    install_transport(api)
+    path = env / "numeric.yaml"
+    path.write_text(yaml.safe_dump({"columns": [
+        {"key": "id", "label": "Id", "type": "text", "required": True, "is_key": True},
+    ]}))
+    # The archive prompt (expected.calls and question are dropped) never appears: the dry run comes first.
+    for args in (["--dry-run"], ["--yes"], []):
+        result = runner.invoke(app, ["schema", "push", "demo", str(path), *args])
+        assert result.exit_code == 1, result.output
+        assert "can't be converted in place" in result.output
+        assert "Archive" not in result.output
+    assert not api.calls("PUT", "/v1/datasets/ds1/schema")
+
+
+def test_schema_push_warns_when_the_server_ignores_dry_run(env, install_transport):
+    api = FakeApi()
+    api.dry_run_result = {"columns": []}  # an older server: applied it, answered with the schema
+    install_transport(api)
+    path = env / "s.yaml"
+    path.write_text(yaml.safe_dump({"columns": [{"key": "id", "label": "Id!", "type": "text"}]}))
+    result = runner.invoke(app, ["schema", "push", "demo", str(path), "--yes"])
+    assert result.exit_code == 1
+    assert "does not support dry runs" in result.output
 
 
 # --- rows pull ------------------------------------------------------------------

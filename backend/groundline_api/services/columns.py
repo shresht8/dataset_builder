@@ -32,6 +32,7 @@ from sqlalchemy.orm import Session
 
 from groundline_api.models.dataset import DatasetColumn
 from groundline_api.models.row import DatasetRow
+from groundline_api.services import schema_impact
 
 OPTION_TYPES = {ColumnType.SELECT, ColumnType.MULTI_SELECT}
 _MAX_LISTED = 20
@@ -235,7 +236,11 @@ def write_columns(db: Session, dataset_id: uuid.UUID, columns: list[Column]) -> 
 
     `order` follows list position. On a 422 (key backfill refused) the caller
     must roll back.
+
+    Refuses (422) a change that would newly break a stored row (GL-134): checked
+    first, once, so every caller is covered.
     """
+    schema_impact.check(db, dataset_id, columns)
     existing = {c.key: c for c in columns_of(db, dataset_id)}
     payload_keys = {c.key for c in columns}
     old_key = next((c.key for c in existing.values() if c.is_key and not c.archived), None)

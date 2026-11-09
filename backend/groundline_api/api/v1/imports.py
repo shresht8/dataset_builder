@@ -98,6 +98,27 @@ def _existing_keys(db: Session, dataset_id: uuid.UUID) -> set[str]:
     )
 
 
+def _require_usable_mapping(mapping: dict[str, str], columns: list[DatasetColumn]) -> None:
+    """GL-133: refuse a mapping that would import nothing, or leave a required column empty.
+
+    Lives here, not in `importer`, because bundle import calls `importer.commit` with
+    mappings of its own (an empty dataset has no header at all).
+    """
+    if not mapping:
+        raise HTTPException(status_code=422, detail="no column of the file is mapped to the schema")
+    missing = importer.compatibility([], columns, mapping)["required_without_source"]
+    if missing:
+        names = ", ".join(f"'{key}'" for key in missing)
+        many = len(missing) > 1
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"required {'columns' if many else 'column'} {names}: no column of the file "
+                f"is mapped to {'them' if many else 'it'}. Map a column, or change the schema first"
+            ),
+        )
+
+
 def _parse_json_form(raw: str | None, field: str) -> Any:
     if raw is None:
         return None
@@ -147,14 +168,20 @@ async def preview_import(
             importer.validate_mapping(parsed_mapping, columns)
         except importer.ImportRequestError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+        _require_usable_mapping(parsed_mapping, columns)
 
     existing = _existing_keys(db, dataset_id) if key_column(columns) else set()
-    sample, total, validation = importer.preview(source, columns, parsed_mapping, existing)
+    sample, total, blank, validation = importer.preview(source, columns, parsed_mapping, existing)
+    suggested = importer.suggest_mapping(source.header, columns)
     return ImportPreviewResponse(
         columns=source.header,
-        suggested_mapping=importer.suggest_mapping(source.header, columns),
+        suggested_mapping=suggested,
         sample_rows=sample,
         total_rows=total,
+        blank_skipped=blank,
+        compatibility=importer.compatibility(
+            source.header, columns, suggested if parsed_mapping is None else parsed_mapping
+        ),
         validation=validation,
         records_key=source.records_key,
         ignored_keys=source.ignored_keys,
@@ -186,6 +213,7 @@ async def commit_import(
         importer.validate_mapping(parsed_mapping, columns)
     except importer.ImportRequestError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    _require_usable_mapping(parsed_mapping, columns)
 
     parsed_skip = _parse_json_form(skip, "skip")
     if parsed_skip is None:
@@ -205,7 +233,7 @@ async def commit_import(
 
     key_col = key_column(columns)
     existing = _existing_keys(db, dataset_id) if key_col else set()
-    created, imported, skipped, errors = importer.commit(
+    created, imported, skipped, errors, blank = importer.commit(
         source, columns, parsed_mapping, set(parsed_skip), fixes_by_row, existing
     )
     # Rows are listed and versioned in created_at order; one transaction would
@@ -232,4 +260,6 @@ async def commit_import(
             detail="a key in this file was just used by another change; preview again",
         ) from None
 
-    return ImportCommitResponse(imported=imported, skipped=skipped, errors=errors)
+    return ImportCommitResponse(
+        imported=imported, skipped=skipped, errors=errors, blank_skipped=blank
+    )
