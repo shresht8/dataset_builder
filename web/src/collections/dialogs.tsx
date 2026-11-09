@@ -6,6 +6,7 @@ import { useEffect, useState, type KeyboardEvent, type ReactNode } from 'react'
 import { ApiError, getCollection, listCollections, moveDataset } from '../api/client'
 import type { Collection, CollectionTree, Dataset } from '../api/types'
 import { useAuth } from '../auth/AuthContext'
+import { nameProblem } from '../names'
 
 const RANK = { viewer: 0, annotator: 1, editor: 2, admin: 3 } as const
 
@@ -67,8 +68,10 @@ export function NameDialog({ title, confirmLabel, initialName = '', withDescript
   const [description, setDescription] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const problem = nameProblem(name.trim())
 
   async function submit() {
+    if (problem) return
     setBusy(true)
     setError(null)
     const message = await onSubmit(name.trim(), withDescription && description.trim() ? description.trim() : null)
@@ -91,7 +94,11 @@ export function NameDialog({ title, confirmLabel, initialName = '', withDescript
           Name
           <input autoFocus value={name} onChange={(event) => setName(event.target.value)} />
         </label>
-        <span className="field-hint">Lowercase letters, digits, - and _; starts with a letter or digit.</span>
+        {problem ? (
+          <span className="field-error">{problem}</span>
+        ) : (
+          <span className="field-hint">Lowercase letters, digits, - and _; starts with a letter or digit.</span>
+        )}
         {withDescription && (
           <label>
             Description
@@ -103,7 +110,7 @@ export function NameDialog({ title, confirmLabel, initialName = '', withDescript
           <button type="button" onClick={onClose}>
             Cancel
           </button>
-          <button type="submit" disabled={busy || name.trim() === ''}>
+          <button type="submit" disabled={busy || name.trim() === '' || problem !== null}>
             {confirmLabel}
           </button>
         </div>

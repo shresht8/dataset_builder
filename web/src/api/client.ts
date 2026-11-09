@@ -22,6 +22,7 @@ import type {
   User,
   VersionRead,
 } from './types'
+import { NAME_RULE } from '../names'
 
 export class ApiError extends Error {
   status: number
@@ -36,6 +37,24 @@ export class ApiError extends Error {
   }
 }
 
+// The API's `detail` as readable text (GL-143): a string as is, FastAPI's 422
+// list as "field: message" lines, anything else as the status text.
+function detailText(body: unknown, fallback: string): string {
+  const detail = (body as { detail?: unknown } | null)?.detail
+  if (typeof detail === 'string') return detail
+  if (Array.isArray(detail) && detail.length > 0) {
+    return detail
+      .map((item: { type?: string; loc?: unknown[]; msg?: string }) => {
+        const field = Array.isArray(item.loc) ? String(item.loc[item.loc.length - 1]) : ''
+        if (field === 'name' && item.type === 'string_pattern_mismatch') return `Name: ${NAME_RULE}`
+        const message = item.msg ?? 'invalid value'
+        return field && field !== 'body' ? `${field}: ${message}` : message
+      })
+      .join('; ')
+  }
+  return fallback
+}
+
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`/v1${path}`, {
     credentials: 'include',
@@ -44,7 +63,7 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   })
   if (!response.ok) {
     const body = await response.json().catch(() => null)
-    throw new ApiError(response.status, body?.detail ?? response.statusText, body)
+    throw new ApiError(response.status, detailText(body, response.statusText), body)
   }
   if (response.status === 204) {
     return undefined as T
@@ -287,7 +306,7 @@ async function apiFetchForm<T>(path: string, form: FormData): Promise<T> {
   })
   if (!response.ok) {
     const body = await response.json().catch(() => null)
-    throw new ApiError(response.status, body?.detail ?? response.statusText, body)
+    throw new ApiError(response.status, detailText(body, response.statusText), body)
   }
   return response.json() as Promise<T>
 }
@@ -372,7 +391,7 @@ export async function exportCollection(
   })
   if (!response.ok) {
     const body = await response.json().catch(() => null)
-    throw new ApiError(response.status, body?.detail ?? response.statusText, body)
+    throw new ApiError(response.status, detailText(body, response.statusText), body)
   }
   const skipped = JSON.parse(response.headers.get('X-Groundline-Skipped') ?? '[]') as string[]
   return { blob: await response.blob(), skipped }

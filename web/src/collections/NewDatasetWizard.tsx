@@ -18,8 +18,10 @@ import {
   deleteDataset,
   getSchema,
   inferSchema,
+  listDatasets,
   listStore,
 } from '../api/client'
+import { freeName, nameProblem } from '../names'
 import type { Column, CollectionTree, Dataset, StoreEntry } from '../api/types'
 import { ConfirmDialog } from '../datasets/ConfirmDialog'
 import { fileCompat, labelList } from '../datasets/compat'
@@ -63,7 +65,14 @@ function SchemaFit({ fileColumns, schema }: { fileColumns: string[]; schema: Sto
 }
 
 export function nameFromFile(fileName: string): string {
-  const stem = fileName.replace(/\.[^.]+$/, '').toLowerCase()
+  // Accented letters keep their base letter (GL-143); NFD doesn't split đ.
+  const stem = fileName
+    .replace(/\.[^.]+$/, '')
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/đ/g, 'd')
+    .replace(/Đ/g, 'D')
+    .toLowerCase()
   const cleaned = stem.replace(/[^a-z0-9_-]+/g, '-').replace(/^[-_]+/, '').replace(/-+$/, '')
   return (cleaned || 'dataset').slice(0, 100)
 }
@@ -92,6 +101,8 @@ export function NewDatasetWizard({ collection, initialFolderId = null, onClose, 
   // Per-item state.
   const [name, setName] = useState('')
   const [folderId, setFolderId] = useState<string>(initialFolderId ?? '')
+  // The name is taken where the dataset would go: a free name to offer (GL-143).
+  const [clash, setClash] = useState<string | null>(null)
   const [recordsKey, setRecordsKey] = useState<string | undefined>(undefined)
   const [keyChoices, setKeyChoices] = useState<string[] | null>(null)
   // CSV only: the delimiter infer used; the import step reuses it (GL-141).
@@ -112,6 +123,7 @@ export function NewDatasetWizard({ collection, initialFolderId = null, onClose, 
   const deletedRef = useRef(false)
 
   const item = queue[index]
+  const nameError = nameProblem(name.trim())
 
   function patchItem(patch: Partial<QueueItem>) {
     setQueue((prev) => prev.map((q, i) => (i === index ? { ...q, ...patch } : q)))
@@ -122,6 +134,7 @@ export function NewDatasetWizard({ collection, initialFolderId = null, onClose, 
     setIndex(i)
     setName(nameFromFile(next.file.name))
     setFolderId(initialFolderId ?? '')
+    setClash(null)
     setRecordsKey(undefined)
     setKeyChoices(null)
     setDelimiter(undefined)
@@ -144,6 +157,26 @@ export function NewDatasetWizard({ collection, initialFolderId = null, onClose, 
     const nextIndex = queue.findIndex((q, i) => i > index && q.status === 'pending')
     if (nextIndex === -1) setStep('summary')
     else beginItem(nextIndex)
+  }
+
+  // Names are unique per parent, as the API checks: the collection folder (or
+  // root), or the unfiled datasets. The API still has the last word at Create.
+  async function leaveDetails() {
+    setBusy(true)
+    setError(null)
+    try {
+      const siblings = collection
+        ? (await listDatasets({ collectionId: collection.id })).filter((d) => d.folder_id === (folderId || null))
+        : await listDatasets({ unfiled: true })
+      const taken = new Set(siblings.map((d) => d.name))
+      const wanted = name.trim()
+      if (taken.has(wanted)) setClash(freeName(wanted, taken))
+      else setStep('schema')
+    } catch (err) {
+      setError(errorMessage(err, 'Could not check the name'))
+    } finally {
+      setBusy(false)
+    }
   }
 
   async function runInfer(key?: string, delim?: string) {
@@ -308,7 +341,8 @@ export function NewDatasetWizard({ collection, initialFolderId = null, onClose, 
           ))}
         </ol>
       )}
-      {error && <p className="error">{error}</p>}
+      {/* The schema editor shows the error itself when it's on screen (GL-143). */}
+      {error && !(step === 'schema' && (tab === 'infer' || editingCopy)) && <p className="error">{error}</p>}
 
       {step === 'files' && (
         <div className="stacked-form">
@@ -344,13 +378,44 @@ export function NewDatasetWizard({ collection, initialFolderId = null, onClose, 
           <h4>{item.file.name}</h4>
           <label>
             Dataset name
-            <input autoFocus value={name} onChange={(event) => setName(event.target.value)} />
+            <input
+              autoFocus
+              value={name}
+              onChange={(event) => {
+                setName(event.target.value)
+                setClash(null)
+              }}
+            />
           </label>
-          <span className="field-hint">Lowercase letters, digits, - and _.</span>
+          {nameError ? (
+            <span className="field-error">{nameError}</span>
+          ) : (
+            <span className="field-hint">Lowercase letters, digits, - and _.</span>
+          )}
+          {clash && (
+            <p className="field-error">
+              A dataset named <code>{name.trim()}</code> already exists here.{' '}
+              <button
+                type="button"
+                onClick={() => {
+                  setName(clash)
+                  setClash(null)
+                }}
+              >
+                Use {clash}
+              </button>
+            </p>
+          )}
           {collection && (
             <label>
               Folder
-              <select value={folderId} onChange={(event) => setFolderId(event.target.value)}>
+              <select
+                value={folderId}
+                onChange={(event) => {
+                  setFolderId(event.target.value)
+                  setClash(null)
+                }}
+              >
                 <option value="">(collection root)</option>
                 {folderOptions(collection).map((f) => (
                   <option key={f.id} value={f.id}>
@@ -364,7 +429,11 @@ export function NewDatasetWizard({ collection, initialFolderId = null, onClose, 
             <button type="button" onClick={skipItem}>
               Skip this file
             </button>
-            <button type="button" disabled={name.trim() === ''} onClick={() => setStep('schema')}>
+            <button
+              type="button"
+              disabled={busy || name.trim() === '' || nameError !== null || clash !== null}
+              onClick={() => void leaveDetails()}
+            >
               Next: schema
             </button>
           </div>
