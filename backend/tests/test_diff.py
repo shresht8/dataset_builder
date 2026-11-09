@@ -94,11 +94,18 @@ def test_added_removed_modified_with_field_detail(client, as_role, dataset_id):
         json={"status": "needs_review"},
         headers={"If-Match": str(to_remove["rev"])},
     )
-    client.patch(
+    edited = client.patch(
         f"/v1/datasets/{dataset_id}/rows/{to_modify['id']}",
         json={"data": {"input": "after", "score": 9}},
         headers={"If-Match": str(to_modify["rev"])},
-    )
+    ).json()
+    # Editing an approved row sends it back to review (GL-135): approve it again.
+    assert edited["status"] == "needs_review"
+    assert client.patch(
+        f"/v1/datasets/{dataset_id}/rows/{to_modify['id']}",
+        json={"status": "approved"},
+        headers={"If-Match": str(edited["rev"])},
+    ).status_code == 200
     as_role("annotator")
     added = _create_row(client, dataset_id, {"input": "new", "score": 4})
 

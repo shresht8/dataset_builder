@@ -199,7 +199,7 @@ def _plan_dataset(ds: BundleDataset, columns: list[dict[str, Any]]) -> DatasetPl
         if path not in keys
     ]
     mapping = {path: path for path in source.header if path in keys}
-    created, _imported, _skipped, errors = importer.commit(source, orm_columns, mapping, set(), {})
+    created, _imported, _skipped, errors, _blank = importer.commit(source, orm_columns, mapping, set(), {})
     plan.errors += errors
     plan.rows = created
     return plan

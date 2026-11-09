@@ -81,6 +81,9 @@ from groundline_api.models.dataset import DatasetColumn
 from groundline_api.services.validation import key_column, row_errors
 
 SAMPLE_SIZE = 20
+# The preview lists at most this many rows with errors; the totals are exact.
+ERROR_ROWS_SHOWN = 200
+NO_MAPPED_VALUES = "no values in the mapped columns"
 
 
 class ImportRequestError(Exception):
@@ -210,6 +213,34 @@ def _parse_structured(
         records_key=parsed.records_key,
         ignored_keys=parsed.ignored_keys,
     )
+
+
+def _has_value(value: Any) -> bool:
+    if value is None:
+        return False
+    return not (isinstance(value, str) and value.strip() == "")
+
+
+def is_blank_line(source: ParsedSource, values: dict[str, Any] | RecordProblem) -> bool:
+    """A CSV/XLSX row with every cell empty. A `{}` record in JSON/YAML is a real record."""
+    if source.structured or isinstance(values, RecordProblem):
+        return False
+    return not any(_has_value(v) for v in values.values())
+
+
+def compatibility(
+    header: list[str], columns: list[DatasetColumn], mapping: dict[str, str]
+) -> dict[str, list[str]]:
+    """What the mapping does with the file's columns and the schema's columns (GL-133)."""
+    active = [c for c in columns if not c.archived]
+    mapped_keys = set(mapping.values())
+    unfilled = [c for c in active if c.key not in mapped_keys]
+    return {
+        "matched": [h for h in header if h in mapping],
+        "ignored_source_columns": [h for h in header if h not in mapping],
+        "unfilled_schema_columns": [c.key for c in unfilled],
+        "required_without_source": [c.key for c in unfilled if c.required],
+    }
 
 
 def _iterate_rows(source: ParsedSource) -> Iterator[tuple[int, dict[str, Any] | RecordProblem]]:
@@ -403,6 +434,7 @@ def _validate_row(
     if isinstance(values, RecordProblem):
         return {}, [("", values.reason)]
     data, failures = map_row(values, mapping, columns_by_key, structured)
+    had_values = any(_has_value(v) for v in values.values())
     for key, value in fixes.items():
         # A fix replaces the source value, so its coercion failure no longer applies;
         # date fixes take the same date rules as the source.
@@ -412,6 +444,8 @@ def _validate_row(
             data[key] = _coerce_date(value) if column and column.type == ColumnType.DATE and value is not None else value
         except _CoercionError as exc:
             failures.append((key, str(exc)))
+    if not data and not failures and had_values:
+        return data, [("", NO_MAPPED_VALUES)]
     failed = {column for column, _ in failures}
     failures += [(k, reason) for k, reason in row_errors(data, columns) if k not in failed]
     failures += keys.failures(index, data)
@@ -423,37 +457,65 @@ def preview(
     columns: list[DatasetColumn],
     mapping: dict[str, str] | None,
     existing_keys: set[str] | None = None,
-) -> tuple[list[dict[str, Any]], int, dict[str, Any] | None]:
-    """Single pass: sample rows, total count, and an optional validation report.
+) -> tuple[list[dict[str, Any]], int, int, dict[str, Any] | None]:
+    """Single pass: sample rows, total count, blank lines and an optional validation report.
 
-    Returns (sample_rows, total_rows, validation) where sample_rows is a list
-    of `{"row": index, "values": {...}}` (up to SAMPLE_SIZE), and validation
-    is `None` if no mapping was supplied, else `{"valid": n, "errors": [...]}`.
+    Returns (sample_rows, total_rows, blank_skipped, validation). sample_rows is a
+    list of `{"row": index, "values": {...}}` (up to SAMPLE_SIZE, blank lines left
+    out). total_rows counts blank CSV/XLSX lines too, so indices stay positions in
+    the file. validation is `None` if no mapping was supplied, else the report:
+    `valid`, at most ERROR_ROWS_SHOWN rows' worth of `errors`, and exact totals
+    (`error_total`, `failed_rows`, `checked_rows`, `by_column`).
     """
     columns_by_key = {col.key: col for col in columns}
     keys = _KeyCheck(key_column(columns), existing_keys or set())
     sample: list[dict[str, Any]] = []
     total = 0
+    blank = 0
     valid = 0
+    failed_rows = 0
+    error_total = 0
+    shown_rows = 0
     errors: list[dict[str, Any]] = []
+    by_column: dict[str, dict[str, Any]] = {}
 
     for index, values in _iterate_rows(source):
         total += 1
+        if is_blank_line(source, values):
+            blank += 1
+            continue
         if len(sample) < SAMPLE_SIZE:
             sample.append({"row": index, "values": _sample_values(values)})
-        if mapping is not None:
-            _, failures = _validate_row(
-                index, values, mapping, columns, columns_by_key, source.structured, {}, keys
+        if mapping is None:
+            continue
+        _, failures = _validate_row(
+            index, values, mapping, columns, columns_by_key, source.structured, {}, keys
+        )
+        if not failures:
+            valid += 1
+            continue
+        failed_rows += 1
+        error_total += len(failures)
+        for key, reason in failures:
+            entry = by_column.setdefault(key, {"column": key, "rows": 0, "reason": reason})
+            entry["rows"] += 1
+        if shown_rows < ERROR_ROWS_SHOWN:
+            shown_rows += 1
+            errors.extend(
+                {"row": index, "column": key, "reason": reason} for key, reason in failures
             )
-            if failures:
-                errors.extend(
-                    {"row": index, "column": key, "reason": reason} for key, reason in failures
-                )
-            else:
-                valid += 1
 
-    validation = None if mapping is None else {"valid": valid, "errors": errors}
-    return sample, total, validation
+    validation = None
+    if mapping is not None:
+        validation = {
+            "valid": valid,
+            "errors": errors,
+            "error_total": error_total,
+            "failed_rows": failed_rows,
+            "checked_rows": total - blank,
+            "by_column": sorted(by_column.values(), key=lambda e: (-e["rows"], e["column"])),
+        }
+    return sample, total, blank, validation
 
 
 def commit(
@@ -463,21 +525,27 @@ def commit(
     skip: set[int],
     fixes: dict[int, dict[str, Any]],
     existing_keys: set[str] | None = None,
-) -> tuple[list[dict[str, Any]], int, int, list[dict[str, Any]]]:
+) -> tuple[list[dict[str, Any]], int, int, list[dict[str, Any]], int]:
     """Single pass: apply mapping + skip/fixes, validate, and report the outcome.
 
-    Returns (row_data_to_create, imported_count, skipped_count, errors). Every
-    source row appears in exactly one of: the created rows, the skipped
-    count, or the errors list (never silently dropped).
+    Returns (row_data_to_create, imported_count, skipped_count, errors, blank_skipped).
+    Every source row appears in exactly one of: the created rows, the skipped
+    count, the blank-line count (CSV/XLSX lines with every cell empty; tested
+    before `skip`, so a retry that carries them in `skip` never counts them as
+    skipped), or the errors list (never silently dropped).
     """
     columns_by_key = {col.key: col for col in columns}
     keys = _KeyCheck(key_column(columns), existing_keys or set())
     created: list[dict[str, Any]] = []
     imported = 0
     skipped = 0
+    blank = 0
     errors: list[dict[str, Any]] = []
 
     for index, values in _iterate_rows(source):
+        if is_blank_line(source, values):
+            blank += 1
+            continue
         if index in skip:
             skipped += 1
             continue
@@ -499,4 +567,4 @@ def commit(
         created.append(data)
         imported += 1
 
-    return created, imported, skipped, errors
+    return created, imported, skipped, errors, blank

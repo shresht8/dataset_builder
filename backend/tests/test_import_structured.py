@@ -171,10 +171,11 @@ def test_fixture_yaml_imports_cleanly(client, suite_dataset):
     preview_full = _preview(
         client, suite_dataset, "suite.yaml", content, mapping=preview["suggested_mapping"]
     ).json()
-    assert preview_full["validation"] == {"valid": len(_cases()), "errors": []}
+    assert preview_full["validation"]["valid"] == len(_cases())
+    assert preview_full["validation"]["errors"] == []
 
     result = _commit(client, suite_dataset, "suite.yaml", content, preview["suggested_mapping"]).json()
-    assert result == {"imported": len(_cases()), "skipped": 0, "errors": []}
+    assert result == {"imported": len(_cases()), "skipped": 0, "errors": [], "blank_skipped": 0}
 
     stored = _data_by_id(suite_dataset)
     for case in _cases():
