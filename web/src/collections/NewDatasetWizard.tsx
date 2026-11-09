@@ -22,7 +22,7 @@ import {
 } from '../api/client'
 import type { Column, CollectionTree, Dataset, StoreEntry } from '../api/types'
 import { ConfirmDialog } from '../datasets/ConfirmDialog'
-import { fileCompat, labelList } from '../datasets/compat'
+import { fileCompat, labelList, type Compat } from '../datasets/compat'
 import { ImportWizard, RECORDS_LIST_QUESTION } from '../datasets/ImportWizard'
 import { SchemaEditor, columnProblems, toEditable, toInput, type EditableColumn } from '../schema/SchemaEditor'
 import { Dialog, errorMessage, folderOptions } from './dialogs'
@@ -41,23 +41,73 @@ interface QueueItem {
 type Step = 'files' | 'details' | 'schema' | 'import' | 'summary'
 
 /** `My File (2).CSV` -> `my-file-2`: fits ^[a-z0-9][a-z0-9_-]{0,99}$. */
-/** Hint before "Create dataset": how the file's columns fit the picked schema. The import
- * itself (API) stays the hard check; inferred names can differ from what it will see. */
-function SchemaFit({ fileColumns, schema }: { fileColumns: string[]; schema: StoreEntry }) {
-  if (fileColumns.length === 0) return null
-  const fit = fileCompat(fileColumns, schema.columns)
-  const bad = fit.matched === 0 || fit.requiredMissing.length > 0
-  return (
-    <div className={bad ? 'notice warning-list' : 'field-hint'}>
+/** `a`, `a and b`, `a, b and c`: for a sentence rather than a list. */
+function andList(items: string[]): string {
+  return items.length <= 1 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`
+}
+
+/** The import would refuse this fit: nothing matches, or a required column has no source. */
+function fitRefused(fit: Compat): boolean {
+  return fit.matched === 0 || fit.requiredMissing.length > 0
+}
+
+interface SchemaFitProps {
+  fit: Compat
+  schemaName: string
+  createAnyway: boolean
+  onCreateAnyway: (value: boolean) => void
+  onInfer: () => void
+}
+
+/** Hint before "Create dataset": how the file's columns fit the picked schema (GL-133,
+ * GL-137). The import itself (API) stays the hard check; inferred names can differ from
+ * what it will see, so a refused fit can still be created on purpose. */
+function SchemaFit({ fit, schemaName, createAnyway, onCreateAnyway, onInfer }: SchemaFitProps) {
+  const optionalUnfilled = fit.unfilled.filter((c) => !c.required)
+  const details = (
+    <details>
+      <summary>Column details</summary>
       <p>
         {fit.matched} of {fit.total} file column{fit.total === 1 ? '' : 's'} match this schema.
       </p>
-      {fit.matched === 0 && <p>None match: importing this file with this schema would be refused.</p>}
-      {fit.requiredMissing.length > 0 && (
-        <p>No file column matches the required {labelList(fit.requiredMissing)}: the import would be refused.</p>
-      )}
-      {fit.ignored.length > 0 && <p>Not imported: {fit.ignored.join(', ')}</p>}
-      {fit.unfilled.length > 0 && <p>Left empty: {labelList(fit.unfilled)}</p>}
+      {fit.ignored.length > 0 && <p>Columns in the file this schema doesn't have: {fit.ignored.join(', ')}</p>}
+      {optionalUnfilled.length > 0 && <p>Schema columns the file leaves empty: {labelList(optionalUnfilled)}</p>}
+    </details>
+  )
+  if (!fitRefused(fit)) {
+    return (
+      <div className="field-hint">
+        <p>
+          {fit.matched === fit.total
+            ? `All ${fit.total} file columns match this schema.`
+            : `${fit.matched} of ${fit.total} file columns match this schema; the rest won't be imported.`}
+        </p>
+        {(fit.ignored.length > 0 || optionalUnfilled.length > 0) && details}
+      </div>
+    )
+  }
+  return (
+    <div className="notice warning-list" role="alert">
+      <p>
+        <strong>This file doesn't fit the "{schemaName}" schema.</strong>
+      </p>
+      <p>
+        {fit.matched === 0
+          ? "None of the file's columns match it."
+          : `The file has nothing for ${andList(fit.requiredMissing.map((c) => c.label || c.key))}, which this schema requires.`}{' '}
+        Its rows can't be imported with it.
+      </p>
+      <p>
+        <button type="button" className="link-button" onClick={onInfer}>
+          Infer a schema from this file
+        </button>{' '}
+        instead, or pick another schema above.
+      </p>
+      {details}
+      <label>
+        <input type="checkbox" checked={createAnyway} onChange={(event) => onCreateAnyway(event.target.checked)} /> Create
+        the dataset with this schema anyway
+      </label>
     </div>
   )
 }
@@ -103,6 +153,8 @@ export function NewDatasetWizard({ collection, initialFolderId = null, onClose, 
   const [entries, setEntries] = useState<StoreEntry[]>([])
   const [picked, setPicked] = useState<StoreEntry | null>(null)
   const [editingCopy, setEditingCopy] = useState(false)
+  // The user chose to create with a store schema the fit check says the import would refuse.
+  const [createAnyway, setCreateAnyway] = useState(false)
   const [outcome, setOutcome] = useState<string | null>(null)
   const [importColumns, setImportColumns] = useState<Column[] | null>(null)
   const [imported, setImported] = useState(false)
@@ -129,6 +181,7 @@ export function NewDatasetWizard({ collection, initialFolderId = null, onClose, 
     setRecordCount(null)
     setPicked(null)
     setEditingCopy(false)
+    setCreateAnyway(false)
     setOutcome(null)
     setImportColumns(null)
     setImported(false)
@@ -224,6 +277,9 @@ export function NewDatasetWizard({ collection, initialFolderId = null, onClose, 
 
   const schemaInvalid =
     tab === 'store' && !editingCopy ? picked === null : columns.length === 0 || Object.keys(columnProblems(columns)).length > 0
+  const fit =
+    tab === 'store' && picked && !editingCopy && fileColumns.length > 0 ? fileCompat(fileColumns, picked.columns) : null
+  const blockedByFit = fit !== null && fitRefused(fit) && !createAnyway
 
   // --- render -------------------------------------------------------------------
 
@@ -433,6 +489,7 @@ export function NewDatasetWizard({ collection, initialFolderId = null, onClose, 
                         onChange={() => {
                           setPicked(entry)
                           setEditingCopy(false)
+                          setCreateAnyway(false)
                         }}
                       />
                       {entry.name} ({entry.columns.length} columns
@@ -443,7 +500,15 @@ export function NewDatasetWizard({ collection, initialFolderId = null, onClose, 
               </ul>
               {picked && !editingCopy && (
                 <>
-                  <SchemaFit fileColumns={fileColumns} schema={picked} />
+                  {fit && (
+                    <SchemaFit
+                      fit={fit}
+                      schemaName={picked.name}
+                      createAnyway={createAnyway}
+                      onCreateAnyway={setCreateAnyway}
+                      onInfer={() => setTab('infer')}
+                    />
+                  )}
                   <SchemaEditor columns={toEditable(picked.columns)} />
                   <button
                     type="button"
@@ -475,7 +540,12 @@ export function NewDatasetWizard({ collection, initialFolderId = null, onClose, 
             <button type="button" onClick={skipItem}>
               Skip this file
             </button>
-            <button type="button" disabled={busy || schemaInvalid} onClick={() => void create()}>
+            <button
+              type="button"
+              disabled={busy || schemaInvalid || blockedByFit}
+              title={blockedByFit ? "This file doesn't fit the picked schema" : undefined}
+              onClick={() => void create()}
+            >
               Create dataset
             </button>
           </div>
