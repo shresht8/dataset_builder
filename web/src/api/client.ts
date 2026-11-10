@@ -22,6 +22,7 @@ import type {
   User,
   VersionRead,
 } from './types'
+import { NAME_RULE } from '../names'
 
 export class ApiError extends Error {
   status: number
@@ -36,6 +37,24 @@ export class ApiError extends Error {
   }
 }
 
+// The API's `detail` as readable text (GL-143): a string as is, FastAPI's 422
+// list as "field: message" lines, anything else as the status text.
+function detailText(body: unknown, fallback: string): string {
+  const detail = (body as { detail?: unknown } | null)?.detail
+  if (typeof detail === 'string') return detail
+  if (Array.isArray(detail) && detail.length > 0) {
+    return detail
+      .map((item: { type?: string; loc?: unknown[]; msg?: string }) => {
+        const field = Array.isArray(item.loc) ? String(item.loc[item.loc.length - 1]) : ''
+        if (field === 'name' && item.type === 'string_pattern_mismatch') return `Name: ${NAME_RULE}`
+        const message = item.msg ?? 'invalid value'
+        return field && field !== 'body' ? `${field}: ${message}` : message
+      })
+      .join('; ')
+  }
+  return fallback
+}
+
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`/v1${path}`, {
     credentials: 'include',
@@ -44,7 +63,7 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   })
   if (!response.ok) {
     const body = await response.json().catch(() => null)
-    throw new ApiError(response.status, body?.detail ?? response.statusText, body)
+    throw new ApiError(response.status, detailText(body, response.statusText), body)
   }
   if (response.status === 204) {
     return undefined as T
@@ -287,7 +306,7 @@ async function apiFetchForm<T>(path: string, form: FormData): Promise<T> {
   })
   if (!response.ok) {
     const body = await response.json().catch(() => null)
-    throw new ApiError(response.status, body?.detail ?? response.statusText, body)
+    throw new ApiError(response.status, detailText(body, response.statusText), body)
   }
   return response.json() as Promise<T>
 }
@@ -313,17 +332,20 @@ export function cutVersion(datasetId: string, payload: VersionCutPayload): Promi
 // Without `mapping`, returns detected columns + a suggested auto-mapping and
 // a sample. With `mapping`, additionally returns the full validation report.
 // `recordsKey` picks the list of records in a JSON/YAML file (GL-3.5-5); when
-// one is needed, the 422's body carries `records_key_candidates`.
+// one is needed, the 422's body carries `records_key_candidates`. `delimiter`
+// (CSV only) overrides the detected one (GL-141).
 export function previewImport(
   datasetId: string,
   file: File,
   mapping?: Record<string, string>,
   recordsKey?: string,
+  delimiter?: string,
 ): Promise<ImportPreviewResponse> {
   const form = new FormData()
   form.append('file', file)
   if (mapping) form.append('mapping', JSON.stringify(mapping))
   if (recordsKey) form.append('records_key', recordsKey)
+  if (delimiter) form.append('delimiter', delimiter)
   return apiFetchForm<ImportPreviewResponse>(`/datasets/${datasetId}/import/preview`, form)
 }
 
@@ -336,6 +358,7 @@ export function commitImport(
   skip: number[],
   fixes: Record<number, Record<string, unknown>>,
   recordsKey?: string,
+  delimiter?: string,
 ): Promise<ImportCommitResponse> {
   const form = new FormData()
   form.append('file', file)
@@ -343,15 +366,17 @@ export function commitImport(
   if (skip.length > 0) form.append('skip', JSON.stringify(skip))
   if (Object.keys(fixes).length > 0) form.append('fixes', JSON.stringify(fixes))
   if (recordsKey) form.append('records_key', recordsKey)
+  if (delimiter) form.append('delimiter', delimiter)
   return apiFetchForm<ImportCommitResponse>(`/datasets/${datasetId}/import`, form)
 }
 
 // Schema inference (GL-117): drafts columns from a data file; creates nothing.
 // A 422 may carry `records_key_candidates`, as import preview does.
-export function inferSchema(file: File, recordsKey?: string): Promise<InferResponse> {
+export function inferSchema(file: File, recordsKey?: string, delimiter?: string): Promise<InferResponse> {
   const form = new FormData()
   form.append('file', file)
   if (recordsKey) form.append('records_key', recordsKey)
+  if (delimiter) form.append('delimiter', delimiter)
   return apiFetchForm<InferResponse>('/schema/infer', form)
 }
 
@@ -366,7 +391,7 @@ export async function exportCollection(
   })
   if (!response.ok) {
     const body = await response.json().catch(() => null)
-    throw new ApiError(response.status, body?.detail ?? response.statusText, body)
+    throw new ApiError(response.status, detailText(body, response.statusText), body)
   }
   const skipped = JSON.parse(response.headers.get('X-Groundline-Skipped') ?? '[]') as string[]
   return { blob: await response.blob(), skipped }

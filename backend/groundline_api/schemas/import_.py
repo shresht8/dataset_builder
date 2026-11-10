@@ -31,6 +31,22 @@ class ImportColumnProblem(BaseModel):
     reason: str
 
 
+class ImportExtraCells(BaseModel):
+    """CSV/XLSX rows with non-empty cells past the header; those cells aren't imported (GL-146)."""
+
+    rows: int
+    examples: list[int]  # the first few row indices
+
+
+class ImportIdCheck(BaseModel):
+    """No key column, but a mapped source column named `id` repeats or is empty (GL-146)."""
+
+    column: str
+    repeated: list[str]  # the first few repeated values
+    repeated_rows: int  # rows whose value appeared on an earlier row
+    missing_rows: int
+
+
 class ImportValidationReport(BaseModel):
     valid: int
     # At most ERROR_ROWS_SHOWN rows' worth; the fields below are exact totals.
@@ -39,6 +55,13 @@ class ImportValidationReport(BaseModel):
     failed_rows: int
     checked_rows: int  # total rows minus blank lines
     by_column: list[ImportColumnProblem]
+    # Failed rows whose only problem is the key (GL-142): it is already in the
+    # dataset, or it repeats a key from an earlier row of the file.
+    existing_key_rows: int = 0
+    repeated_key_rows: int = 0
+    # Warnings only: the import still goes ahead.
+    extra_cells: ImportExtraCells | None = None
+    id_check: ImportIdCheck | None = None
 
 
 class ImportCompatibility(BaseModel):
@@ -63,6 +86,8 @@ class ImportPreviewResponse(BaseModel):
     # top-level keys that were ignored.
     records_key: str | None = None
     ignored_keys: list[str] = []
+    # CSV only: the delimiter used (detected, unless one was given).
+    delimiter: str | None = None
 
 
 class ImportCommitResponse(BaseModel):

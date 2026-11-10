@@ -161,6 +161,8 @@ export function DatasetPage() {
   const [deleteDatasetOpen, setDeleteDatasetOpen] = useState(false)
   const [rowToDelete, setRowToDelete] = useState<Row | null>(null)
   const cellRefs = useRef(new Map<string, HTMLTableCellElement>())
+  // The dataset whose first load already decided the opening view (GL-145).
+  const openedViewFor = useRef<string | null>(null)
   // Set when an edit is saved because focus moved to another element.
   const savedOnBlurRef = useRef(false)
 
@@ -181,8 +183,21 @@ export function DatasetPage() {
   useEffect(() => {
     if (!datasetId) return
     listRows(datasetId, { status: filters.status, assignee: filters.assignee, q: filters.q })
-      .then(setRows)
+      .then((loaded) => {
+        // On open, an empty "my queue" gives way to All rows. Only the first
+        // load: a queue the user picks by hand stays, even when empty.
+        if (openedViewFor.current !== datasetId) {
+          openedViewFor.current = datasetId
+          if (loaded.length === 0 && filtersEqual(filters, DEFAULT_VIEW.filters)) {
+            applyView(ALL_ROWS_VIEW)
+            return
+          }
+        }
+        setRows(loaded)
+      })
       .catch((err) => setLoadError(err instanceof ApiError ? err.message : 'Failed to load dataset'))
+    // `filters` is read only for the opening check; its fields are the deps.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [datasetId, filters.status, filters.assignee, filters.q, reloadKey])
 
   useEffect(() => {
@@ -831,7 +846,15 @@ export function DatasetPage() {
           datasetId={datasetId}
           columns={orderedColumns}
           onClose={() => setImportOpen(false)}
-          onImported={reloadRows}
+          onImported={(count, notImported) => {
+            // New rows are unassigned drafts, so most views would hide them.
+            setNotice(
+              `Imported ${count} row${count === 1 ? '' : 's'}` +
+                (notImported > 0 ? `; ${notImported} not imported.` : '.'),
+            )
+            if (filtersEqual(filters, ALL_ROWS_VIEW.filters, missingRequired, false)) reloadRows()
+            else applyView(ALL_ROWS_VIEW)
+          }}
         />
       )}
       {rowToDelete && (

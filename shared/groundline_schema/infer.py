@@ -71,6 +71,36 @@ def _usable_key(values: list[Any], present: int, total: int) -> bool:
     )
 
 
+def _plural(count: int, word: str) -> str:
+    return f"{count} {word}{'' if count == 1 else 's'}"
+
+
+def _why_not_key(field: str, values: list[Any], present: int, total: int) -> str:
+    """Why `field` failed `_usable_key`, for the warning next to NO_KEY (GL-146)."""
+    reasons: list[str] = []
+    missing = total - present + sum(1 for v in values if isinstance(v, str) and not v.strip())
+    if missing:
+        reasons.append(f"{_plural(missing, 'record')} without one")
+    texts = [v for v in values if isinstance(v, str) and v.strip()]
+    seen: set[str] = set()
+    repeated: list[str] = []
+    for value in texts:
+        if value in seen and value not in repeated:
+            repeated.append(value)
+        seen.add(value)
+    if repeated:
+        shown = ", ".join(f'"{v}"' for v in repeated[:3])
+        more = f" and {len(repeated) - 3} more" if len(repeated) > 3 else ""
+        reasons.append(f"repeated values {shown}{more}")
+    not_text = sum(1 for v in values if not isinstance(v, str))
+    if not_text:
+        reasons.append(f"{_plural(not_text, 'value')} not text")
+    padded = sum(1 for v in texts if v.strip() != v)
+    if padded:
+        reasons.append(f"{_plural(padded, 'value')} with leading or trailing spaces")
+    return f"\"{field}\" can't be the key: " + "; ".join(reasons)
+
+
 def infer_columns(records: list[dict], key: str | None = None) -> tuple[list[dict], list[str]]:
     """Draft columns for `records`. Returns (columns, warnings).
 
@@ -99,6 +129,10 @@ def infer_columns(records: list[dict], key: str | None = None) -> tuple[list[dic
         key = "id"
     else:
         warnings.append(NO_KEY)
+        if "id" in values_by_path:
+            warnings.append(
+                _why_not_key("id", values_by_path["id"], present.get("id", 0), len(records))
+            )
 
     columns: list[dict] = []
     for path, values in values_by_path.items():

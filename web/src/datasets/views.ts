@@ -24,7 +24,9 @@ export const BUILTIN_VIEWS: SavedView[] = [
   { id: 'builtin:missing-required', name: 'Missing required', filters: {}, missingRequired: true },
 ]
 
-// Default view on open (§4: "the default view is my queue").
+// Default view on open (§4): my queue. When the queue is empty on open, the
+// dataset page shows All rows instead (GL-145), so a fresh import never looks
+// like an empty dataset.
 export const DEFAULT_VIEW = BUILTIN_VIEWS[1]
 
 export function filtersEqual(

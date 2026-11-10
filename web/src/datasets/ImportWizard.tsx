@@ -5,7 +5,7 @@
 // JSON / JSONL / YAML (GL-3.5-6): nested records arrive as dotted source
 // columns; the API reports which list the records came from (and offers the
 // candidates when it can't tell). Import stays create-only: a key that
-// already exists is a row error pointing at `rows push`.
+// already exists is a row error ("import only adds new rows, so skip this row").
 //
 // The backend's `POST /import` (GL-2-8) has no server-side import session:
 // each call re-parses the whole file and re-applies `skip`/`fixes` from
@@ -29,6 +29,10 @@ import { formatJson, parseJsonText, summarizeJson } from './json'
 
 const ACCEPTED = '.csv,.xlsx,.json,.jsonl,.ndjson,.yaml,.yml'
 
+function plural(count: number, word: string): string {
+  return `${count} ${word}${count === 1 ? '' : 's'}`
+}
+
 // Sample values are strings for CSV/XLSX and typed for JSON/YAML.
 function showValue(value: unknown): string {
   if (value === null || value === undefined) return ''
@@ -38,6 +42,38 @@ function showValue(value: unknown): string {
 
 // Shown instead of the API's "choose a records_key" message (GL-132).
 export const RECORDS_LIST_QUESTION = 'This file has more than one list. Which one holds your data?'
+
+// CSV delimiters the API accepts (GL-141); it detects one when none is given.
+const DELIMITERS: [string, string][] = [
+  [',', 'Comma (,)'],
+  [';', 'Semicolon (;)'],
+  ['\t', 'Tab'],
+  ['|', 'Pipe (|)'],
+]
+
+/** The CSV delimiter in use; changing it re-reads the file. */
+export function DelimiterPicker({
+  value,
+  disabled,
+  onChange,
+}: {
+  value: string
+  disabled?: boolean
+  onChange: (delimiter: string) => void
+}) {
+  return (
+    <label className="records-key-choice">
+      Columns separated by{' '}
+      <select value={value} disabled={disabled} onChange={(event) => onChange(event.target.value)}>
+        {DELIMITERS.map(([d, label]) => (
+          <option key={label} value={d}>
+            {label}
+          </option>
+        ))}
+      </select>
+    </label>
+  )
+}
 
 function candidatesOf(err: unknown): string[] | null {
   if (!(err instanceof ApiError) || err.status !== 422) return null
@@ -82,11 +118,14 @@ interface ImportWizardProps {
   datasetId: string
   columns: Column[]
   onClose: () => void
-  onImported: () => void
+  // After every round that created rows, even if other rows still have errors:
+  // the rows imported so far, and the rows of this file still not imported.
+  onImported: (imported: number, notImported: number) => void
   // Phase 4 (GL-121): start from a file the user already uploaded (the
   // new-dataset wizard), skipping the upload step.
   initialFile?: File
   initialRecordsKey?: string
+  initialDelimiter?: string
   // GL-138: with `initialFile`, a way back out of the import (to the new-dataset
   // wizard's schema step) until the first commit. Resolves to an error message
   // to show, or null once the caller has moved on.
@@ -183,6 +222,7 @@ export function ImportWizard({
   onImported,
   initialFile,
   initialRecordsKey,
+  initialDelimiter,
   onBack,
 }: ImportWizardProps) {
   const activeColumns = columns.filter((c) => !c.archived)
@@ -197,6 +237,8 @@ export function ImportWizard({
   const [recordsKey, setRecordsKey] = useState<string | undefined>(undefined)
   const [ignoredKeys, setIgnoredKeys] = useState<string[]>([])
   const [recordsKeyChoices, setRecordsKeyChoices] = useState<string[] | null>(null)
+  // CSV only: the delimiter the preview used (detected or chosen).
+  const [delimiter, setDelimiter] = useState<string | undefined>(undefined)
   const [totalRows, setTotalRows] = useState(0)
   const [blankSkipped, setBlankSkipped] = useState(0)
   const [report, setReport] = useState<ImportValidationReport | null>(null)
@@ -224,8 +266,26 @@ export function ImportWizard({
         ? `No column of the file is mapped to ${labelList(compat.requiredMissing)} (required). Map one, or change the schema first.`
         : null
   // Half or more of the checked rows fail: probably the wrong schema (GL-133).
-  const wrongSchema = !committed && report !== null && report.checked_rows > 0 && report.failed_rows * 2 >= report.checked_rows
+  // Rows failing only on their key say nothing about the schema, so they are
+  // left out of both counts (GL-142).
+  const keyOnlyRows = report ? report.existing_key_rows + report.repeated_key_rows : 0
+  const schemaFailed = report ? report.failed_rows - keyOnlyRows : 0
+  const schemaChecked = report ? report.checked_rows - keyOnlyRows : 0
+  const wrongSchema = !committed && report !== null && schemaFailed > 0 && schemaFailed * 2 >= schemaChecked
   const shownRows = new Set(errors.map((e) => e.row)).size
+  const nothingToApply = committed && Object.keys(fixes).length === 0 && activeSkip.size === 0
+
+  // A round's result is at the top; the button that ran it is below the error list.
+  const wizardRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (committed) wizardRef.current?.scrollTo({ top: 0 })
+  }, [committed, totals])
+
+  // Closing with rows still in error ends on the totals, not on a closed dialog.
+  function requestClose() {
+    if (committed && !done) setDone(true)
+    else onClose()
+  }
 
   function showPreview(preview: ImportPreviewResponse) {
     setSourceColumns(preview.columns)
@@ -236,15 +296,16 @@ export function ImportWizard({
     setRecordsKey(preview.records_key ?? undefined)
     setIgnoredKeys(preview.ignored_keys ?? [])
     setRecordsKeyChoices(null)
+    setDelimiter(preview.delimiter ?? undefined)
     setStep('mapping')
   }
 
-  async function loadPreview(chosen: File, key?: string) {
+  async function loadPreview(chosen: File, key?: string, delim?: string) {
     setFile(chosen)
     setBusy(true)
     setError(null)
     try {
-      showPreview(await previewImport(datasetId, chosen, undefined, key))
+      showPreview(await previewImport(datasetId, chosen, undefined, key, delim))
     } catch (err) {
       const candidates = candidatesOf(err)
       if (candidates && candidates.length > 0) {
@@ -263,7 +324,7 @@ export function ImportWizard({
     if (!initialFile || started.current) return
     started.current = true
     setRecordsKey(initialRecordsKey)
-    void loadPreview(initialFile, initialRecordsKey)
+    void loadPreview(initialFile, initialRecordsKey, initialDelimiter)
     // Run once, for the file passed in.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -305,7 +366,7 @@ export function ImportWizard({
     setBusy(true)
     setError(null)
     try {
-      const preview = await previewImport(datasetId, file, mapping, recordsKey)
+      const preview = await previewImport(datasetId, file, mapping, recordsKey, delimiter)
       setValidCount(preview.validation?.valid ?? 0)
       setErrors(preview.validation?.errors ?? [])
       setReport(preview.validation)
@@ -336,6 +397,7 @@ export function ImportWizard({
     setMapping({})
     setRecordsKey(undefined)
     setRecordsKeyChoices(null)
+    setDelimiter(undefined)
     setIgnoredKeys([])
     setSourceColumns([])
     setSampleRows([])
@@ -366,7 +428,7 @@ export function ImportWizard({
     setError(null)
     const effectiveSkip = new Set([...handledRows, ...activeSkip])
     try {
-      const result = await commitImport(datasetId, file, mapping, [...effectiveSkip], fixes, recordsKey)
+      const result = await commitImport(datasetId, file, mapping, [...effectiveSkip], fixes, recordsKey, delimiter)
       const remainingRows = new Set(result.errors.map((e) => e.row))
       const importedThisRound = new Set<number>()
       for (let row = 1; row <= totalRows; row += 1) {
@@ -383,11 +445,12 @@ export function ImportWizard({
       setErrors(result.errors)
       setTotals((prev) => ({
         imported: prev.imported + result.imported,
-        skipped: prev.skipped + result.skipped,
+        // Not result.skipped: that also counts rows imported in earlier rounds, sent in `skip`.
+        skipped: prev.skipped + activeSkip.size,
       }))
-      if (result.errors.length === 0) {
-        setDone(true)
-        onImported()
+      if (result.errors.length === 0) setDone(true)
+      if (result.imported > 0 || totals.imported > 0) {
+        onImported(totals.imported + result.imported, remainingRows.size)
       }
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Import failed')
@@ -399,16 +462,16 @@ export function ImportWizard({
   function handleKeyDown(event: KeyboardEvent<HTMLDivElement>) {
     if (event.key === 'Escape') {
       event.preventDefault()
-      onClose()
+      requestClose()
     }
   }
 
   return (
     <div className="drawer-backdrop" onKeyDown={handleKeyDown}>
-      <div className="import-wizard" role="dialog" aria-modal="true" aria-label="Import rows">
+      <div ref={wizardRef} className="import-wizard" role="dialog" aria-modal="true" aria-label="Import rows">
         <div className="drawer-header">
           <span>Import rows</span>
-          <button type="button" onClick={onClose}>
+          <button type="button" onClick={requestClose}>
             Close
           </button>
         </div>
@@ -459,6 +522,13 @@ export function ImportWizard({
                 Rows from <code>{recordsKey}</code>
                 {ignoredKeys.length > 0 && <>; ignored: {ignoredKeys.join(', ')}</>}
               </p>
+            )}
+            {delimiter !== undefined && file && (
+              <DelimiterPicker
+                value={delimiter}
+                disabled={busy}
+                onChange={(next) => void loadPreview(file, recordsKey, next)}
+              />
             )}
             <table className="import-table">
               <thead>
@@ -551,7 +621,9 @@ export function ImportWizard({
             {done ? (
               <div>
                 <p>
-                  Import complete: {totals.imported} imported, {totals.skipped} skipped.
+                  {errors.length > 0
+                    ? `Import stopped: ${totals.imported} imported, ${totals.skipped} skipped, ${shownRows} not imported.`
+                    : `Import complete: ${totals.imported} imported, ${totals.skipped} skipped.`}
                 </p>
                 <button type="button" onClick={onClose}>
                   Done
@@ -559,19 +631,36 @@ export function ImportWizard({
               </div>
             ) : (
               <>
-                <p>
-                  {validCount} row{validCount === 1 ? '' : 's'} valid.
-                  {errors.length > 0 &&
-                    ` ${committed || !report ? errors.length : report.error_total} error${(committed || !report ? errors.length : report.error_total) === 1 ? '' : 's'} to resolve.`}
-                  {blankSkipped > 0 && ` ${blankSkipped} blank line${blankSkipped === 1 ? '' : 's'} skipped.`}
-                </p>
+                {committed ? (
+                  <div className="notice" role="status">
+                    <p>
+                      <strong>
+                        {totals.imported} row{totals.imported === 1 ? '' : 's'} imported.
+                      </strong>{' '}
+                      {shownRows} row{shownRows === 1 ? '' : 's'} still {shownRows === 1 ? 'has' : 'have'} errors
+                      {totals.skipped > 0 && `, and ${totals.skipped} ${totals.skipped === 1 ? 'was' : 'were'} skipped`}.
+                    </p>
+                    <p>
+                      Fix or skip the rows below and import them, or close to leave them out. Imported rows stay either
+                      way, so there is no going back to the mapping.
+                    </p>
+                  </div>
+                ) : (
+                  <p>
+                    {validCount} row{validCount === 1 ? '' : 's'} valid.
+                    {errors.length > 0 &&
+                      ` ${report ? report.error_total : errors.length} error${(report ? report.error_total : errors.length) === 1 ? '' : 's'} to resolve.`}
+                    {blankSkipped > 0 && ` ${blankSkipped} blank line${blankSkipped === 1 ? '' : 's'} skipped.`}
+                  </p>
+                )}
                 {wrongSchema && report && (
                   <div className="notice warning-list" role="alert">
                     <p>
-                      This looks like the wrong schema: {report.failed_rows} of {report.checked_rows} rows fail
-                      validation. Go back to change the mapping, choose another file, or close this window. The schema
-                      of an empty dataset can be changed from its Schema tab.
+                      This looks like the wrong schema: {schemaFailed} of {schemaChecked} rows fail validation. Go
+                      back to change the mapping, choose another file, or close this window. The schema of an empty
+                      dataset can be changed from its Schema tab.
                     </p>
+                    <p>To import the valid rows anyway, tick the box below.</p>
                     <label>
                       <input
                         type="checkbox"
@@ -582,10 +671,59 @@ export function ImportWizard({
                     </label>
                   </div>
                 )}
+                {!committed && report && keyOnlyRows > 0 && (
+                  <div className="notice" role="status">
+                    {report.existing_key_rows === report.checked_rows ? (
+                      <p>
+                        Every row of this file is already in the dataset (same key), so there is nothing new to import.
+                        Import only adds new rows.
+                      </p>
+                    ) : (
+                      <>
+                        {report.existing_key_rows > 0 && (
+                          <p>
+                            {plural(report.existing_key_rows, 'row')} {report.existing_key_rows === 1 ? 'is' : 'are'}{' '}
+                            already in the dataset (same key) and won't be imported: import only adds new rows.
+                          </p>
+                        )}
+                        {report.repeated_key_rows > 0 && (
+                          <p>
+                            {plural(report.repeated_key_rows, 'row')} {report.repeated_key_rows === 1 ? 'repeats' : 'repeat'}{' '}
+                            the key of an earlier row in this file.
+                          </p>
+                        )}
+                      </>
+                    )}
+                  </div>
+                )}
+                {!committed && report && (report.extra_cells || report.id_check) && (
+                  <ul className="notice warning-list">
+                    {report.extra_cells && (
+                      <li>
+                        {plural(report.extra_cells.rows, 'row')} {report.extra_cells.rows === 1 ? 'has' : 'have'} more
+                        cells than the header (row {report.extra_cells.examples.join(', ')}
+                        {report.extra_cells.rows > report.extra_cells.examples.length && ', …'}). The extra cells won't
+                        be imported.
+                      </li>
+                    )}
+                    {report.id_check && (
+                      <li>
+                        This dataset has no key column, so rows are imported even when the file's{' '}
+                        <code>{report.id_check.column}</code> repeats or is empty:
+                        {report.id_check.repeated_rows > 0 &&
+                          ` ${plural(report.id_check.repeated_rows, 'row')} repeat${report.id_check.repeated_rows === 1 ? 's' : ''} an earlier value (${report.id_check.repeated.join(', ')})`}
+                        {report.id_check.repeated_rows > 0 && report.id_check.missing_rows > 0 && ';'}
+                        {report.id_check.missing_rows > 0 &&
+                          ` ${plural(report.id_check.missing_rows, 'row')} ${report.id_check.missing_rows === 1 ? 'has' : 'have'} none`}
+                        .
+                      </li>
+                    )}
+                  </ul>
+                )}
                 {!committed && report && report.by_column.length > 0 && (
                   <ul className="import-by-column">
-                    {report.by_column.map((c) => (
-                      <li key={c.column}>
+                    {report.by_column.map((c, i) => (
+                      <li key={`${c.column}-${i}`}>
                         {columnsByKey.get(c.column)?.label ?? (c.column || 'Whole record')}: {c.rows} of{' '}
                         {report.checked_rows} row{report.checked_rows === 1 ? '' : 's'}, {c.reason}
                       </li>
@@ -653,10 +791,10 @@ export function ImportWizard({
                 )}
                 <button
                   type="button"
-                  disabled={busy || (wrongSchema && !confirmedAnyway)}
+                  disabled={busy || (wrongSchema && !confirmedAnyway) || nothingToApply}
                   onClick={() => void confirmImport()}
                 >
-                  {errors.length > 0 ? 'Fix/skip and import' : 'Confirm import'}
+                  {committed ? 'Import fixed rows' : errors.length > 0 ? 'Fix/skip and import' : 'Confirm import'}
                 </button>
               </>
             )}

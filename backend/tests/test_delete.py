@@ -134,7 +134,7 @@ def test_deleted_key_can_be_reused_by_create_and_import(client, ds):
         data={"mapping": json.dumps({"id": "id"})},
     ).json()
     assert resp["imported"] == 1  # b reused; c still exists
-    assert "already exists" in resp["errors"][0]["reason"]
+    assert "already in this dataset" in resp["errors"][0]["reason"]
 
 
 def test_bulk_delete_by_ids_and_keys_is_all_or_nothing(client, as_role, ds):

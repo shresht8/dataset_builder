@@ -244,5 +244,5 @@ def test_preview_caps_the_error_list_but_reports_totals(client, as_role, optiona
     assert v["failed_rows"] == 250
     assert v["checked_rows"] == 251
     assert v["by_column"] == [
-        {"column": "score", "rows": 250, "reason": "expected a number, got str"}
+        {"column": "score", "rows": 250, "reason": '"nope" is not a number'}
     ]

@@ -71,32 +71,47 @@ def is_empty(value: Any) -> bool:
     return False
 
 
+_SHOWN_CHARS = 60
+
+
+def show_value(value: Any) -> str:
+    """A value as the user wrote it, for messages: text in double quotes, the rest as JSON."""
+    text = (
+        f'"{value}"' if isinstance(value, str) else json.dumps(value, ensure_ascii=False, default=str)
+    )
+    return text if len(text) <= _SHOWN_CHARS else text[: _SHOWN_CHARS - 1] + "…"
+
+
+def _options(col: DatasetColumn) -> str:
+    return f"Options: {', '.join(col.options or [])}" if col.options else "This column has no options yet"
+
+
 def type_error(col: DatasetColumn, value: Any) -> str | None:
-    """Return an error fragment if `value` doesn't match `col.type`, else None."""
+    """Return a plain reason if `value` doesn't match `col.type`, else None (GL-148)."""
     if col.type in (ColumnType.TEXT, ColumnType.LONG_TEXT):
         if not isinstance(value, str):
-            return f"expected text, got {type(value).__name__}"
+            return f"{show_value(value)} is not text"
     elif col.type == ColumnType.NUMBER:
         if isinstance(value, bool) or not isinstance(value, (int, float)):
-            return f"expected a number, got {type(value).__name__}"
+            return f"{show_value(value)} is not a number"
     elif col.type == ColumnType.BOOLEAN:
         if not isinstance(value, bool):
-            return f"expected a boolean, got {type(value).__name__}"
+            return f"{show_value(value)} is not yes or no"
     elif col.type == ColumnType.SELECT:
-        if not isinstance(value, str):
-            return f"expected one of {col.options}, got {type(value).__name__}"
-        if value not in (col.options or []):
-            return f"'{value}' is not one of {col.options}"
+        if not isinstance(value, str) or value not in (col.options or []):
+            return f"{show_value(value)} is not an option. {_options(col)}"
     elif col.type == ColumnType.MULTI_SELECT:
         if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
-            return f"expected a list of strings from {col.options}"
+            return f"{show_value(value)} is not a list of options. {_options(col)}"
         bad = [v for v in value if v not in (col.options or [])]
         if bad:
-            return f"{bad} not in {col.options}"
+            shown = ", ".join(show_value(v) for v in bad)
+            verb = "is not an option" if len(bad) == 1 else "are not options"
+            return f"{shown} {verb}. {_options(col)}"
     elif col.type == ColumnType.JSON:
         return _json_error(col, value)
     elif col.type == ColumnType.DATE and not is_date(value):
-        return f"expected a date as YYYY-MM-DD, got {value!r}"
+        return f"{show_value(value)} is not a date. Use YYYY-MM-DD"
     if col.is_key and isinstance(value, str) and value != value.strip():
         return "key value must not have leading or trailing whitespace"
     return None

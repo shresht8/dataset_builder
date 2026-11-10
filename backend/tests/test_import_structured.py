@@ -279,7 +279,7 @@ def test_key_duplicates_in_file_and_existing_keys_are_row_errors(client, suite_d
     mapping = again.json()["suggested_mapping"]
     report = _preview(client, suite_dataset, "suite.yaml", content, mapping=mapping).json()
     assert report["validation"]["valid"] == 0
-    assert all("already exists — use rows push to update" in e["reason"]
+    assert all("is already in this dataset. Import only adds new rows" in e["reason"]
                for e in report["validation"]["errors"])
 
     doubled = yaml.safe_load(content)
@@ -288,7 +288,7 @@ def test_key_duplicates_in_file_and_existing_keys_are_row_errors(client, suite_d
     result = _commit(client, suite_dataset, "d.yaml", doubled_bytes, mapping).json()
     assert result["imported"] == 1
     assert result["errors"] == [
-        {"row": 2, "column": "id", "reason": "duplicate key 'new-1' in file (also row 1)"}
+        {"row": 2, "column": "id", "reason": '"new-1" is also the key of row 1. Keys must be unique, so skip one of the two rows'}
     ]
     assert "new-1" in {row.row_key for row in _rows(suite_dataset)}
 
@@ -406,7 +406,7 @@ def test_malformed_jsonl_line_and_non_object_are_row_errors(client, simple_datas
     result = _commit(client, simple_dataset, "x.jsonl", content, MAPPING).json()
     assert result["imported"] == 2
     reasons = {e["row"]: e["reason"] for e in result["errors"]}
-    assert reasons[2].startswith("line 3: invalid JSON")
+    assert reasons[2].startswith("line 3: not valid JSON at column")
     assert reasons[3] == "record is not an object"
 
 
@@ -454,8 +454,8 @@ def test_coercion_of_typed_values(client, simple_dataset):
     assert data[0] == {"name": "5", "count": 7, "flag": True, "tags": ["a"], "blob": "text"}
     assert data[1] == {"name": "true", "flag": False}
     reasons = {(e["row"], e["column"]): e["reason"] for e in result["errors"]}
-    assert reasons[(3, "name")] == "map this to a json column"
-    assert reasons[(4, "count")] == "map this to a json column"
+    assert reasons[(3, "name")] == "a list or object can only go in a json column"
+    assert reasons[(4, "count")] == "a list or object can only go in a json column"
 
 
 def test_nested_object_under_a_non_json_column_becomes_dotted_columns(client, simple_dataset):

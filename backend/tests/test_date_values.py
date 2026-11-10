@@ -85,7 +85,7 @@ def test_valid_dates_are_stored_as_given(client, dataset_id):
 def test_invalid_dates_are_refused(client, dataset_id, value):
     resp = _create(client, dataset_id, {"id": "b", "as_of": value})
     assert resp.status_code == 422
-    assert resp.json()["detail"].startswith("column 'as_of': expected a date as YYYY-MM-DD")
+    assert resp.json()["detail"].startswith("column 'as_of': ") and "is not a date. Use YYYY-MM-DD" in resp.json()["detail"]
 
 
 def test_optional_date_may_be_empty(client, dataset_id):

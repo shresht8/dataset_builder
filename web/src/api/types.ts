@@ -133,6 +133,7 @@ export interface InferResponse {
   columns: ColumnInput[]
   warnings: string[]
   record_count: number
+  delimiter: string | null // CSV only: the one used
 }
 
 // Row status flow (§4): draft -> needs_review -> approved.
@@ -199,6 +200,15 @@ export interface ImportValidationReport {
   failed_rows: number
   checked_rows: number // total rows minus blank lines
   by_column: ImportColumnProblem[]
+  // Failed rows whose only problem is the key (GL-142): already in the dataset,
+  // or repeating a key from an earlier row of the file.
+  existing_key_rows: number
+  repeated_key_rows: number
+  // Warnings only (GL-146): the import still goes ahead.
+  // CSV/XLSX rows with cells past the header; those cells aren't imported.
+  extra_cells: { rows: number; examples: number[] } | null
+  // No key column, and the mapped source `id` repeats or is empty.
+  id_check: { column: string; repeated: string[]; repeated_rows: number; missing_rows: number } | null
 }
 
 export interface ImportCompatibility {
@@ -220,6 +230,8 @@ export interface ImportPreviewResponse {
   // top-level keys that were ignored.
   records_key: string | null
   ignored_keys: string[]
+  // CSV only: the delimiter used (detected unless one was given, GL-141).
+  delimiter: string | null
 }
 
 export interface ImportCommitResponse {

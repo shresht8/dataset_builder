@@ -55,6 +55,7 @@ from __future__ import annotations
 import csv
 import datetime as dt
 import io
+import itertools
 import re
 import zipfile
 from collections.abc import Iterator
@@ -78,12 +79,17 @@ from openpyxl.utils.exceptions import InvalidFileException
 
 from groundline_api.config import settings
 from groundline_api.models.dataset import DatasetColumn
-from groundline_api.services.validation import key_column, row_errors
+from groundline_api.services.validation import key_column, row_errors, show_value
 
 SAMPLE_SIZE = 20
+# CSV delimiters tried by `detect_delimiter`, in order of preference on a tie.
+CSV_DELIMITERS = (",", ";", "\t", "|")
+_DELIMITER_SAMPLE_RECORDS = 50
 # The preview lists at most this many rows with errors; the totals are exact.
 ERROR_ROWS_SHOWN = 200
 NO_MAPPED_VALUES = "no values in the mapped columns"
+# validation.row_errors reports an empty required value as "required" (GL-149).
+MISSING_VALUE = "empty, but this column is required. Fill it in or skip this row"
 
 
 class ImportRequestError(Exception):
@@ -107,6 +113,10 @@ class ParsedSource:
     structured: bool = False
     records_key: str | None = None
     ignored_keys: list[str] = field(default_factory=list)
+    delimiter: str | None = None  # CSV only: the one used
+    # CSV/XLSX: indices of rows with non-empty cells past the header, filled
+    # while `rows` is iterated (GL-146).
+    extra_cell_rows: list[int] = field(default_factory=list)
 
 
 def parse_upload(
@@ -114,13 +124,19 @@ def parse_upload(
     content: bytes,
     columns: list[DatasetColumn] | None = None,
     records_key: str | None = None,
+    delimiter: str | None = None,
 ) -> ParsedSource:
-    """Parse an upload into source columns and a row iterator."""
+    """Parse an upload into source columns and a row iterator.
+
+    A CSV uses `delimiter` when given (one of CSV_DELIMITERS), else the detected one.
+    """
     lower = filename.lower()
-    if lower.endswith(".csv"):
-        return _parse_csv(content)
-    if lower.endswith(".xlsx"):
-        return _parse_xlsx(content)
+    if lower.endswith((".csv", ".xlsx")):
+        source = _parse_csv(content, delimiter) if lower.endswith(".csv") else _parse_xlsx(content)
+        problem = header_problem(source.header)
+        if problem:
+            raise ImportRequestError(problem)
+        return source
     if lower.endswith(STRUCTURED_SUFFIXES):
         return _parse_structured(filename, content, columns or [], records_key)
     raise ImportRequestError(
@@ -129,22 +145,96 @@ def parse_upload(
     )
 
 
-def _parse_csv(content: bytes) -> ParsedSource:
+EMPTY_FILE = "this file is empty: it has no header row and no data. Choose another file"
+TITLE_ROWS_HINT = "If the file starts with title rows above the header, delete them"
+
+
+def unnamed_column(position: int) -> str:
+    return (
+        f"column {position} has no name. Name it in the file's first row, or remove the"
+        f" column. {TITLE_ROWS_HINT}"
+    )
+
+
+def header_problem(header: list[str]) -> str | None:
+    """CSV/XLSX header problems that would lose data (GL-147), or None.
+
+    An empty file; a nameless cell before the last named one; a repeated name
+    (each row is read into a dict, so the later column would replace the earlier
+    one). Nameless cells after the last name are left to the caller.
+    """
+    named = [i for i, name in enumerate(header) if name.strip()]
+    if not named:
+        return EMPTY_FILE
+    problems: list[str] = []
+    gaps = [i + 1 for i in range(named[-1]) if not header[i].strip()]
+    if gaps:
+        problems.append(unnamed_column(gaps[0]))
+    seen: set[str] = set()
+    repeated: list[str] = []
+    for name in header:
+        if name.strip() and name in seen and name not in repeated:
+            repeated.append(name)
+        seen.add(name)
+    if repeated:
+        names = ", ".join(f'"{name}"' for name in repeated)
+        problems.append(
+            f"the column name {names} is used more than once."
+            " Give each column its own name in the file's first row"
+        )
+    return "; ".join(problems) if problems else None
+
+
+def detect_delimiter(text: str) -> str:
+    """The CSV_DELIMITERS entry that splits the first records most consistently.
+
+    A candidate must split the header into at least two columns. Among those, the
+    one with the most non-blank records as wide as the header wins, then the
+    widest header, then the earlier entry. With no candidate, a comma.
+    """
+    best, best_score = ",", (0, 0)
+    for delimiter in CSV_DELIMITERS:
+        try:
+            records = list(
+                itertools.islice(
+                    csv.reader(io.StringIO(text), delimiter=delimiter), _DELIMITER_SAMPLE_RECORDS
+                )
+            )
+        except csv.Error:
+            continue  # e.g. one huge field: this isn't the delimiter
+        widths = [len(r) for r in records if any(cell.strip() for cell in r)]
+        if not widths or widths[0] < 2:
+            continue
+        score = (sum(1 for w in widths if w == widths[0]), widths[0])
+        if score > best_score:
+            best, best_score = delimiter, score
+    return best
+
+
+def _parse_csv(content: bytes, delimiter: str | None = None) -> ParsedSource:
     try:
         text = decode_text(content, csv=True)
     except RecordsError as exc:
         raise ImportRequestError(str(exc)) from None
-    reader = csv.reader(io.StringIO(text))
+    if delimiter is None:
+        delimiter = detect_delimiter(text)
+    elif delimiter not in CSV_DELIMITERS:
+        raise ImportRequestError("delimiter: expected a comma, semicolon, tab or |")
+    reader = csv.reader(io.StringIO(text), delimiter=delimiter)
     try:
         header = next(reader)
     except StopIteration:
         header = []
 
+    source = ParsedSource(header=header, rows=iter(()), delimiter=delimiter)
+
     def rows() -> Iterator[dict[str, Any]]:
-        for raw_row in reader:
+        for index, raw_row in enumerate(reader, start=1):
+            _note_extra_cells(source, index, raw_row, len(header))
             yield _cells(header, raw_row)
 
-    return ParsedSource(header=header, rows=rows())
+    source.rows = rows()
+    return source
 
 
 def _parse_xlsx(content: bytes) -> ParsedSource:
@@ -157,12 +247,19 @@ def _parse_xlsx(content: bytes) -> ParsedSource:
             "could not read the workbook — is it a valid, unencrypted .xlsx file?"
         ) from None
     header = [] if first is None else ["" if cell is None else str(cell) for cell in first]
+    # Sheet rows are as wide as the sheet, so cells past the header sit under
+    # blank header cells: the header ends at its last named cell.
+    width = max((i + 1 for i, name in enumerate(header) if name.strip()), default=0)
+    source = ParsedSource(header=header, rows=iter(()))
 
     def rows() -> Iterator[dict[str, Any]]:
-        for raw_row in row_iter:
-            yield _cells(header, [_xlsx_cell(cell) for cell in raw_row])
+        for index, raw_row in enumerate(row_iter, start=1):
+            cells = [_xlsx_cell(cell) for cell in raw_row]
+            _note_extra_cells(source, index, cells, width)
+            yield _cells(header, cells)
 
-    return ParsedSource(header=header, rows=rows())
+    source.rows = rows()
+    return source
 
 
 def _xlsx_cell(cell: Any) -> Any:
@@ -173,6 +270,11 @@ def _xlsx_cell(cell: Any) -> Any:
     if isinstance(cell, (dt.date, dt.time, dt.timedelta)):
         return cell
     return str(cell)
+
+
+def _note_extra_cells(source: ParsedSource, index: int, raw_row: list[Any], width: int) -> None:
+    if any(_has_value(cell) for cell in raw_row[width:]):
+        source.extra_cell_rows.append(index)
 
 
 def _cells(header: list[str], raw_row: list[Any]) -> dict[str, Any]:
@@ -306,22 +408,22 @@ def _coerce_date(value: Any) -> Any:
     """Coerce one value for a date column (see the module docstring)."""
     if isinstance(value, dt.datetime):
         if value.time() != dt.time(0):
-            raise _CoercionError(f"{value.isoformat(sep=' ')} has a time component")
+            raise _CoercionError(f"{show_value(value.isoformat(sep=' '))} has a time. Use YYYY-MM-DD")
         return value.date().isoformat()
     if isinstance(value, dt.date):
         return value.isoformat()
     if isinstance(value, (dt.time, dt.timedelta)):
-        raise _CoercionError("a time is not a date")
+        raise _CoercionError("a time is not a date. Use YYYY-MM-DD")
     if isinstance(value, (bool, int, float)):
-        raise _CoercionError(f"{value!r} is a number, not a date (write YYYY-MM-DD)")
+        raise _CoercionError(f"{show_value(value)} is a number, not a date. Use YYYY-MM-DD")
     if isinstance(value, str):
         text = value.strip()
         if is_date(text):
             return text
         if _HAS_TIME.match(text):
-            raise _CoercionError(f"{text!r} has a time component")
+            raise _CoercionError(f"{show_value(text)} has a time. Use YYYY-MM-DD")
         return str(value)  # validation names the expected YYYY-MM-DD form
-    raise _CoercionError("map this to a json column")
+    raise _CoercionError("a list or object can only go in a json column")
 
 
 def _coerce_typed(value: Any, col_type: ColumnType) -> Any:
@@ -347,7 +449,7 @@ def _coerce_typed(value: Any, col_type: ColumnType) -> Any:
         return value
     if isinstance(value, list) and col_type == ColumnType.MULTI_SELECT:
         return [str(item) if isinstance(item, PlainScalar) else item for item in value]
-    raise _CoercionError("map this to a json column")
+    raise _CoercionError("a list or object can only go in a json column")
 
 
 def map_row(
@@ -405,8 +507,11 @@ class _KeyCheck:
     column: DatasetColumn | None
     existing: set[str]
     first_row: dict[str, int] = field(default_factory=dict)
+    # What the last `failures` call found: None, "repeated" or "existing" (GL-142).
+    last: str | None = None
 
     def failures(self, index: int, data: dict[str, Any]) -> list[tuple[str, str]]:
+        self.last = None
         if self.column is None:
             return []
         value = data.get(self.column.key)
@@ -414,11 +519,60 @@ class _KeyCheck:
             return []  # row_errors already reports a missing/invalid key
         key = self.column.key
         if value in self.first_row:
-            return [(key, f"duplicate key '{value}' in file (also row {self.first_row[value]})")]
+            self.last = "repeated"
+            reason = (
+                f"{show_value(value)} is also the key of row {self.first_row[value]}."
+                " Keys must be unique, so skip one of the two rows"
+            )
+            return [(key, reason)]
         self.first_row[value] = index
         if value in self.existing:
-            return [(key, f"key '{value}' already exists — use rows push to update")]
+            self.last = "existing"
+            reason = (
+                f"{show_value(value)} is already in this dataset."
+                " Import only adds new rows, so skip this row"
+            )
+            return [(key, reason)]
         return []
+
+
+ID_COLUMN = "id"
+WARNING_EXAMPLES = 5
+
+
+@dataclass
+class _IdCheck:
+    """Without a key column, a mapped source `id` that repeats or is empty (GL-146).
+
+    A warning, not a row error: those rows still import.
+    """
+
+    seen: set[str] = field(default_factory=set)
+    repeated: list[str] = field(default_factory=list)
+    repeated_rows: int = 0
+    missing_rows: int = 0
+
+    def add(self, values: dict[str, Any]) -> None:
+        value = values.get(ID_COLUMN)
+        if not _has_value(value):
+            self.missing_rows += 1
+            return
+        text = str(value)
+        if text in self.seen:
+            self.repeated_rows += 1
+            if text not in self.repeated:
+                self.repeated.append(text)
+        self.seen.add(text)
+
+    def report(self) -> dict[str, Any] | None:
+        if self.repeated_rows == 0 and self.missing_rows == 0:
+            return None
+        return {
+            "column": ID_COLUMN,
+            "repeated": self.repeated[:WARNING_EXAMPLES],
+            "repeated_rows": self.repeated_rows,
+            "missing_rows": self.missing_rows,
+        }
 
 
 def _validate_row(
@@ -447,7 +601,11 @@ def _validate_row(
     if not data and not failures and had_values:
         return data, [("", NO_MAPPED_VALUES)]
     failed = {column for column, _ in failures}
-    failures += [(k, reason) for k, reason in row_errors(data, columns) if k not in failed]
+    failures += [
+        (k, MISSING_VALUE if reason == "required" else reason)
+        for k, reason in row_errors(data, columns)
+        if k not in failed
+    ]
     failures += keys.failures(index, data)
     return data, failures
 
@@ -465,10 +623,17 @@ def preview(
     out). total_rows counts blank CSV/XLSX lines too, so indices stay positions in
     the file. validation is `None` if no mapping was supplied, else the report:
     `valid`, at most ERROR_ROWS_SHOWN rows' worth of `errors`, and exact totals
-    (`error_total`, `failed_rows`, `checked_rows`, `by_column`).
+    (`error_total`, `failed_rows`, `checked_rows`, `by_column`, and the failed rows
+    whose only problem is the key: `existing_key_rows`, `repeated_key_rows`), plus the warnings
+    `extra_cells` and `id_check` (None when there is nothing to warn about).
     """
     columns_by_key = {col.key: col for col in columns}
     keys = _KeyCheck(key_column(columns), existing_keys or set())
+    id_check = (
+        _IdCheck()
+        if mapping is not None and keys.column is None and ID_COLUMN in mapping
+        else None
+    )
     sample: list[dict[str, Any]] = []
     total = 0
     blank = 0
@@ -477,7 +642,9 @@ def preview(
     error_total = 0
     shown_rows = 0
     errors: list[dict[str, Any]] = []
-    by_column: dict[str, dict[str, Any]] = {}
+    by_column: dict[tuple[str, str], dict[str, Any]] = {}
+    # Rows whose only failure is the key: already in the dataset, or repeated in the file.
+    key_only = {"existing": 0, "repeated": 0}
 
     for index, values in _iterate_rows(source):
         total += 1
@@ -488,6 +655,9 @@ def preview(
             sample.append({"row": index, "values": _sample_values(values)})
         if mapping is None:
             continue
+        if id_check is not None and not isinstance(values, RecordProblem):
+            id_check.add(values)
+        keys.last = None  # _validate_row may return before checking the key
         _, failures = _validate_row(
             index, values, mapping, columns, columns_by_key, source.structured, {}, keys
         )
@@ -495,10 +665,23 @@ def preview(
             valid += 1
             continue
         failed_rows += 1
+        if keys.last is not None and len(failures) == 1:
+            key_only[keys.last] += 1
         error_total += len(failures)
-        for key, reason in failures:
-            entry = by_column.setdefault(key, {"column": key, "rows": 0, "reason": reason})
+        for i, (key, reason) in enumerate(failures):
+            # One summary line per kind of problem in a column (GL-149): the key check
+            # comes last in `failures`; an empty value has a fixed reason.
+            if keys.last is not None and i == len(failures) - 1:
+                kind = "key"
+            elif reason == MISSING_VALUE:
+                kind = "missing"
+            else:
+                kind = "value"
+            entry = by_column.setdefault(
+                (key, kind), {"column": key, "rows": 0, "reason": reason, "mixed": False}
+            )
             entry["rows"] += 1
+            entry["mixed"] = entry["mixed"] or reason != entry["reason"]
         if shown_rows < ERROR_ROWS_SHOWN:
             shown_rows += 1
             errors.extend(
@@ -513,7 +696,26 @@ def preview(
             "error_total": error_total,
             "failed_rows": failed_rows,
             "checked_rows": total - blank,
-            "by_column": sorted(by_column.values(), key=lambda e: (-e["rows"], e["column"])),
+            "by_column": [
+                {
+                    "column": e["column"],
+                    "rows": e["rows"],
+                    # Rows with different values: the first one's reason is only an example.
+                    "reason": f"for example {e['reason']}" if e["mixed"] else e["reason"],
+                }
+                for e in sorted(by_column.values(), key=lambda e: (-e["rows"], e["column"]))
+            ],
+            "existing_key_rows": key_only["existing"],
+            "repeated_key_rows": key_only["repeated"],
+            "extra_cells": (
+                {
+                    "rows": len(source.extra_cell_rows),
+                    "examples": source.extra_cell_rows[:WARNING_EXAMPLES],
+                }
+                if source.extra_cell_rows
+                else None
+            ),
+            "id_check": id_check.report() if id_check is not None else None,
         }
     return sample, total, blank, validation
 
