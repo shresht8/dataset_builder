@@ -126,6 +126,10 @@ interface ImportWizardProps {
   initialFile?: File
   initialRecordsKey?: string
   initialDelimiter?: string
+  // GL-138: with `initialFile`, a way back out of the import (to the new-dataset
+  // wizard's schema step) until the first commit. Resolves to an error message
+  // to show, or null once the caller has moved on.
+  onBack?: () => Promise<string | null>
 }
 
 type Step = 'upload' | 'mapping' | 'review'
@@ -219,6 +223,7 @@ export function ImportWizard({
   initialFile,
   initialRecordsKey,
   initialDelimiter,
+  onBack,
 }: ImportWizardProps) {
   const activeColumns = columns.filter((c) => !c.archived)
   const columnsByKey = new Map(activeColumns.map((c) => [c.key, c]))
@@ -323,6 +328,23 @@ export function ImportWizard({
     // Run once, for the file passed in.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  async function backOut() {
+    if (!onBack) return
+    setBusy(true)
+    setError(null)
+    const message = await onBack()
+    setBusy(false)
+    if (message) setError(message)
+  }
+
+  // Leaving the import is offered only before anything was imported.
+  const backOutButton =
+    initialFile && onBack && !committed ? (
+      <button type="button" disabled={busy} onClick={() => void backOut()}>
+        Back to schema
+      </button>
+    ) : null
 
   function handleFile(chosen: File) {
     setRecordsKey(undefined)
@@ -489,6 +511,7 @@ export function ImportWizard({
                 </select>
               </label>
             )}
+            {backOutButton}
           </div>
         )}
 
@@ -585,7 +608,8 @@ export function ImportWizard({
               <button type="button" disabled={busy} onClick={backToUpload}>
                 Back
               </button>
-            )}{' '}
+            )}
+            {backOutButton}{' '}
             <button type="button" disabled={busy || mappingBlock !== null} onClick={() => void confirmMapping()}>
               Continue
             </button>

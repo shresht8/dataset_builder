@@ -26,9 +26,6 @@ htmlcov/
 # Claude files
 *.claude
 
-#docs
-docs/
-
 .local/
 .codegraph/
 .codex/
@@ -40,3 +37,6 @@ infra/docker-compose.override.yml
 
 # LOcal PAT tokens
 *.txt
+
+# Local agent notes
+CLAUDE.local.md
