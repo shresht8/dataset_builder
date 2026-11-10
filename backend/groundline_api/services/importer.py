@@ -88,6 +88,8 @@ _DELIMITER_SAMPLE_RECORDS = 50
 # The preview lists at most this many rows with errors; the totals are exact.
 ERROR_ROWS_SHOWN = 200
 NO_MAPPED_VALUES = "no values in the mapped columns"
+# validation.row_errors reports an empty required value as "required" (GL-149).
+MISSING_VALUE = "empty, but this column is required. Fill it in or skip this row"
 
 
 class ImportRequestError(Exception):
@@ -599,7 +601,11 @@ def _validate_row(
     if not data and not failures and had_values:
         return data, [("", NO_MAPPED_VALUES)]
     failed = {column for column, _ in failures}
-    failures += [(k, reason) for k, reason in row_errors(data, columns) if k not in failed]
+    failures += [
+        (k, MISSING_VALUE if reason == "required" else reason)
+        for k, reason in row_errors(data, columns)
+        if k not in failed
+    ]
     failures += keys.failures(index, data)
     return data, failures
 
@@ -636,7 +642,7 @@ def preview(
     error_total = 0
     shown_rows = 0
     errors: list[dict[str, Any]] = []
-    by_column: dict[str, dict[str, Any]] = {}
+    by_column: dict[tuple[str, str], dict[str, Any]] = {}
     # Rows whose only failure is the key: already in the dataset, or repeated in the file.
     key_only = {"existing": 0, "repeated": 0}
 
@@ -662,9 +668,20 @@ def preview(
         if keys.last is not None and len(failures) == 1:
             key_only[keys.last] += 1
         error_total += len(failures)
-        for key, reason in failures:
-            entry = by_column.setdefault(key, {"column": key, "rows": 0, "reason": reason})
+        for i, (key, reason) in enumerate(failures):
+            # One summary line per kind of problem in a column (GL-149): the key check
+            # comes last in `failures`; an empty value has a fixed reason.
+            if keys.last is not None and i == len(failures) - 1:
+                kind = "key"
+            elif reason == MISSING_VALUE:
+                kind = "missing"
+            else:
+                kind = "value"
+            entry = by_column.setdefault(
+                (key, kind), {"column": key, "rows": 0, "reason": reason, "mixed": False}
+            )
             entry["rows"] += 1
+            entry["mixed"] = entry["mixed"] or reason != entry["reason"]
         if shown_rows < ERROR_ROWS_SHOWN:
             shown_rows += 1
             errors.extend(
@@ -679,7 +696,15 @@ def preview(
             "error_total": error_total,
             "failed_rows": failed_rows,
             "checked_rows": total - blank,
-            "by_column": sorted(by_column.values(), key=lambda e: (-e["rows"], e["column"])),
+            "by_column": [
+                {
+                    "column": e["column"],
+                    "rows": e["rows"],
+                    # Rows with different values: the first one's reason is only an example.
+                    "reason": f"for example {e['reason']}" if e["mixed"] else e["reason"],
+                }
+                for e in sorted(by_column.values(), key=lambda e: (-e["rows"], e["column"]))
+            ],
             "existing_key_rows": key_only["existing"],
             "repeated_key_rows": key_only["repeated"],
             "extra_cells": (

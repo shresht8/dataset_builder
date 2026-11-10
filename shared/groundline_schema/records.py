@@ -76,6 +76,9 @@ def decode_text(content: bytes, *, csv: bool = False) -> str:
     try:
         return content.decode("utf-8-sig")
     except UnicodeDecodeError:
+        # NUL bytes without a UTF-16/32 BOM: a binary file, not text in another encoding (GL-149).
+        if b"\x00" in content[:8192] and not content.startswith((b"\xff\xfe", b"\xfe\xff")):
+            raise RecordsError("this is not a text file — check you picked the right file") from None
         hint = ' — save it as "CSV UTF-8"' if csv else ""
         raise RecordsError(f"file is not UTF-8{hint}") from None
 

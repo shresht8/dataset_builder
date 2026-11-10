@@ -12,6 +12,7 @@ import openpyxl
 import pytest
 from groundline_api.db import SessionLocal
 from groundline_api.models.dataset import Dataset
+from groundline_api.services.importer import MISSING_VALUE
 
 SCHEMA_COLUMNS = [
     {"key": "input", "label": "Customer question", "type": "long_text", "required": True},
@@ -126,7 +127,7 @@ def test_preview_with_mapping_returns_validation_report(client, as_role, dataset
     validation = resp.json()["validation"]
     assert validation["valid"] == 2
     assert validation["errors"] == [
-        {"row": 3, "column": "verdict", "reason": "required"},
+        {"row": 3, "column": "verdict", "reason": MISSING_VALUE},
     ]
     # Preview persists nothing.
     resp = client.get(f"/v1/datasets/{dataset_id}/rows")

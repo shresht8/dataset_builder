@@ -46,7 +46,7 @@ Minimum role in brackets. `{id}` is the dataset UUID.
 | `GET /datasets/{id}/schema` | [viewer] |
 | `PUT /datasets/{id}/schema` | [editor] Full column list. Present keys upsert (re-adding un-archives), absent keys archive. `order` = list position. Validates options, unique keys, no key a dotted prefix of another, JSON Schema with local `$ref` only, at most one key column (text + required). Setting/changing the key column backfills `row_key` or refuses. In a collection the columns are resolved against the store (identical entry reused, else one added) and applied. |
 | `POST /datasets/{id}/schema/apply` | [editor] `{store_schema_id}`: switch a collection dataset to another entry of its store. 422 if unfiled. |
-| `POST /schema/infer` | [editor] Multipart `file` [+ `records_key`, `key`] → draft columns plus warnings. Nothing is stored. |
+| `POST /schema/infer` | [editor] Multipart `file` [+ `records_key`, `key`, `delimiter`] → draft columns, warnings, `record_count` and the CSV `delimiter` used. Nothing is stored. |
 | `GET /datasets/{id}/rows?status=&assignee=&q=` | [viewer] `assignee` = `me` or a user id; `q` is case-insensitive substring over `text` and `long_text` columns. Excludes deleted rows. Ordered by `created_at`. |
 | `POST /datasets/{id}/rows` | [annotator] Validated; new rows are `draft`. |
 | `PATCH /datasets/{id}/rows/{rid}` | [annotator] Requires `If-Match: <rev>` (428 if missing). Mismatch → 409 with the current row as body. Merges `data`; sets `status`, `assignee`. Changing the key value needs editor. Writes `row_edits`, bumps `rev`. |
@@ -69,8 +69,8 @@ Minimum role in brackets. `{id}` is the dataset UUID.
 
 | Method + path | Notes |
 |---|---|
-| `POST /datasets/{id}/import/preview` | [editor] Multipart `file` [+ `mapping`, `records_key`]. Parses only: source columns, suggested mapping, first 20 rows, total, and a full validation report if `mapping` is given. |
-| `POST /datasets/{id}/import` | [editor] Multipart `file` + `mapping` [+ `skip`, `fixes`, `records_key`]. Creates valid rows as `draft`; every source row is reported as imported, skipped or errored. Create-only: an existing key is a row error. No server-side session: each call re-parses the file. |
+| `POST /datasets/{id}/import/preview` | [editor] Multipart `file` [+ `mapping`, `records_key`, `delimiter`]. Parses only: source columns, suggested mapping, first 20 rows, total, the CSV `delimiter` used (detected unless given), and a full validation report if `mapping` is given. |
+| `POST /datasets/{id}/import` | [editor] Multipart `file` + `mapping` [+ `skip`, `fixes`, `records_key`, `delimiter`]. Creates valid rows as `draft`; every source row is reported as imported, skipped or errored. Create-only: an existing key is a row error. No server-side session: each call re-parses the file. |
 | `POST /datasets/{id}/sync` | [editor] Multipart `file` [+ `records_key`, `revs`, `bases`, `force`, `dry_run`, `ignore_unknown`]. Key-matched upsert used by `groundline rows push`. Always 200 when well-formed; `applied` says whether it wrote. All or nothing. |
 | `POST /datasets/{id}/versions` | [editor] `{notes?, include_unapproved=false}`. Empty selection → 422. |
 | `GET /datasets/{id}/versions` | [viewer] Includes `created_by_email`. |

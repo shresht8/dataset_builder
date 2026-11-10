@@ -722,8 +722,8 @@ export function ImportWizard({
                 )}
                 {!committed && report && report.by_column.length > 0 && (
                   <ul className="import-by-column">
-                    {report.by_column.map((c) => (
-                      <li key={c.column}>
+                    {report.by_column.map((c, i) => (
+                      <li key={`${c.column}-${i}`}>
                         {columnsByKey.get(c.column)?.label ?? (c.column || 'Whole record')}: {c.rows} of{' '}
                         {report.checked_rows} row{report.checked_rows === 1 ? '' : 's'}, {c.reason}
                       </li>
